@@ -3,6 +3,11 @@
 All notable changes to DittoMac are recorded here. The format follows [Keep a Changelog](https://keepachangelog.com/)
 and the project uses [Semantic Versioning](https://semver.org/).
 
+## [1.0.1] - 2026-11-23
+### Changed
+- DittoMac now starts with your Mac by default. It registers itself as a login item on first launch. Turn this off in
+  Preferences › General or System Settings › General › Login Items; either choice is respected afterwards.
+
 ## [1.0.0] - 2026-11-23
 First release: a native macOS port of Ditto 3.25.113.0.
 

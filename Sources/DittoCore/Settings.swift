@@ -93,7 +93,7 @@ public final class Settings: @unchecked Sendable {
     public var connectedToClipboard: Bool { get { bool("connectedToClipboard", true) } set { defaults.set(newValue, forKey: "connectedToClipboard") } }
     public var showMenuBarIcon: Bool { get { bool("showMenuBarIcon", true) } set { defaults.set(newValue, forKey: "showMenuBarIcon") } }
     public var showDockIcon: Bool { get { bool("showDockIcon", false) } set { defaults.set(newValue, forKey: "showDockIcon") } }
-    public var launchAtLogin: Bool { get { bool("launchAtLogin", false) } set { defaults.set(newValue, forKey: "launchAtLogin") } }
+    public var launchAtLogin: Bool { get { bool("launchAtLogin", true) } set { defaults.set(newValue, forKey: "launchAtLogin") } }
     public var showStartupMessage: Bool { get { bool("showStartupMessage", true) } set { defaults.set(newValue, forKey: "showStartupMessage") } }
 
     // MARK: retention / capture

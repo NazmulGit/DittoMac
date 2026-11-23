@@ -67,6 +67,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         monitor.start()
         registerHotkeys()
+        ensureLaunchAtLogin()
 
         let nc = NotificationCenter.default
         nc.addObserver(self, selector: #selector(hotkeysChanged), name: .dittoHotkeysChanged, object: nil)
@@ -140,6 +141,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: Hotkeys
+
+    /// Start with the Mac by default (like the Windows installer's "run on startup").
+    /// Only registers when the item was never registered, so turning it off in Preferences
+    /// (which clears Settings.launchAtLogin) or in System Settings › Login Items is respected.
+    private func ensureLaunchAtLogin() {
+        let before = LoginItem.status
+        // A never-registered app can report .notFound; register() still works then.
+        guard state.settings.launchAtLogin, before == .notRegistered || before == .notFound else {
+            NSLog("DittoMac: launch at login: \(LoginItem.statusText) (wanted: \(state.settings.launchAtLogin))")
+            return
+        }
+        do {
+            try LoginItem.setEnabled(true)
+            NSLog("DittoMac: launch at login registered: \(LoginItem.statusText)")
+        } catch {
+            NSLog("DittoMac: launch-at-login registration failed: \(error)")
+        }
+    }
 
     private func registerHotkeys() {
         for prefix in ["main.", "clip.", "group.", "mtg."] { hotkeys.unregisterAll(withPrefix: prefix) }

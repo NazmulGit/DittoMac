@@ -30,3 +30,4 @@ gh release create v1.0.0 dist/DittoMac-1.0.0-universal.dmg dist/DittoMac-1.0.0-u
 | Version | Date | Notes |
 |---|---|---|
 | 1.0.0 | 2026-11-23 | First release, port of Ditto 3.25.113.0 |
+| 1.0.1 | 2026-11-23 | Start with Mac by default |
