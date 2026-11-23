@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>DittoMac</string>
+	<key>CFBundleDisplayName</key>
+	<string>DittoMac</string>
+	<key>CFBundleExecutable</key>
+	<string>DittoMac</string>
+	<key>CFBundleIdentifier</key>
+	<string>io.github.dittomac.DittoMac</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundleShortVersionString</key>
+	<string>__VERSION__</string>
+	<key>CFBundleVersion</key>
+	<string>__BUILD__</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>13.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.productivity</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>Copyright © 2026 DittoMac contributors. GPL-3.0. Based on Ditto by Scott Brogden.</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>DittoMac sends a paste keystroke to the app you were using.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>DittoMac can share clips with your other Macs on the local network when Friends is enabled.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_dittomac._tcp</string>
+	</array>
+</dict>
+</plist>
