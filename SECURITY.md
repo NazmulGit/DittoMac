@@ -2,7 +2,7 @@
 
 ## Reporting a vulnerability
 Please open a private security advisory at
-`https://github.com/NazmulGit/DittoMac/security/advisories/new` rather than a public issue.
+`https://github.com/NazmulGit/DittoMac-Clipboard-Manager/security/advisories/new` rather than a public issue.
 We aim to respond within 7 days.
 
 ## Design principles

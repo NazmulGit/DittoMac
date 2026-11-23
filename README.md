@@ -1,6 +1,6 @@
 <p align="center"><img src="docs/assets/icon.png" width="128" alt="DittoMac icon"></p>
 
-<h1 align="center">DittoMac</h1>
+<h1 align="center">DittoMac - Clipboard Manager for macOS</h1>
 
 <p align="center">
 An unofficial native macOS port of <a href="https://github.com/sabrogden/Ditto">Ditto</a>, the clipboard manager for Windows.<br>
@@ -18,9 +18,16 @@ copy buffers, themes and more) as a native Swift/AppKit app. No Wine and no Elec
 
 <p align="center"><img src="docs/assets/screenshot-quickpaste.png" width="380" alt="Quick Paste popup"></p>
 
+## Why
+
+I used Ditto on Windows for years. When I moved to a Mac I could not find a true equivalent. Maccy and other Mac
+clipboard managers are good, but they are different tools: they do not have Ditto's groups, sticky clips, special
+paste, copy buffers, search syntax or themes. So I built a native macOS port that stays close to Ditto's behaviour.
+It is free and open source.
+
 ## Install
 
-1. Download `DittoMac-<version>-universal.dmg` from [Releases](https://github.com/NazmulGit/DittoMac/releases).
+1. Download `DittoMac-<version>-universal.dmg` from [Releases](https://github.com/NazmulGit/DittoMac-Clipboard-Manager/releases).
 2. Open the DMG and drag **DittoMac** onto **Applications**.
 3. First launch: the app is open-source and ad-hoc signed, not notarized by Apple. **Right-click → Open**, or go to
    *System Settings → Privacy & Security → Open Anyway*. As an alternative:
@@ -82,6 +89,13 @@ ordering, groups, QR code, compare, web search, translate, share, export and *Se
 
 The full parity matrix against Windows Ditto is in [docs/FEATURES.md](docs/FEATURES.md).
 
+## Privacy
+
+- Your clipboard history is stored only in a local database on your Mac (permissions `0600`).
+- No telemetry, no tracking and no account.
+- Clips copied from password managers are skipped and never stored.
+- LAN sharing (*Friends*) is off by default. When you turn it on, it is authenticated and encrypted.
+
 ## Security
 
 Read [SECURITY.md](SECURITY.md). In short: bound SQL everywhere, no plug-in or script execution, password-manager
@@ -93,7 +107,7 @@ default. The weaknesses found in upstream's network code are documented in
 
 You only need the Xcode **Command Line Tools** (`xcode-select --install`). The full Xcode app is not required.
 ```bash
-git clone https://github.com/NazmulGit/DittoMac.git && cd DittoMac
+git clone https://github.com/NazmulGit/DittoMac-Clipboard-Manager.git && cd DittoMac-Clipboard-Manager
 scripts/test.sh                 # unit tests (swift-testing)
 scripts/build_app.sh 1.0.0      # universal, signed dist/DittoMac.app
 scripts/make_dmg.sh 1.0.0       # dist/DittoMac-1.0.0-universal.dmg
@@ -110,6 +124,12 @@ scripts/make_dmg.sh 1.0.0       # dist/DittoMac-1.0.0-universal.dmg
 | [docs/RESOURCES.md](docs/RESOURCES.md) | Upstream and Apple references |
 | [docs/kb/](docs/kb) | Knowledge base: data model, platform notes, themes, protocol, rich formats, security reviews |
 | [CHANGELOG.md](CHANGELOG.md) | Release history |
+
+## Feedback and support
+
+If DittoMac is useful to you, a GitHub star helps other people find it. Bug reports, feature requests and questions
+are welcome in [Issues](https://github.com/NazmulGit/DittoMac-Clipboard-Manager/issues) and
+[Discussions](https://github.com/NazmulGit/DittoMac-Clipboard-Manager/discussions).
 
 ## License
 
