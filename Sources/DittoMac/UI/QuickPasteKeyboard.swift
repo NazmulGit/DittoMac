@@ -44,6 +44,7 @@ extension QuickPasteController {
         case kVK_Return, kVK_ANSI_KeypadEnter:
             if flags == [.option] { propertiesSelection(); return true }
             if flags == [.shift] { pasteSelection(transform: .plainText); return true }
+            if flags == [.option, .shift] { pasteSelection(format: .markdown); return true }
             if none || cmd {
                 if inSearch && isSearchPending {
                     runSearchNow(recordHistory: true)
@@ -113,6 +114,7 @@ extension QuickPasteController {
             }
         }
         if flags == [.command, .shift], key == "n" { newGroup(fromSelection: true); return true }
+        if flags == [.command, .shift], key == "s" { saveSelectionAs(); return true }
         if flags == [.command, .control], key == "n" { newGroup(fromSelection: false); return true }
         if flags == [.command, .option], key == "f" { cycleSearchMode(); return true }
 

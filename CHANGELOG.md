@@ -3,6 +3,29 @@
 All notable changes to DittoMac are recorded here. The format follows [Keep a Changelog](https://keepachangelog.com/)
 and the project uses [Semantic Versioning](https://semver.org/).
 
+## [1.1.0] - 2026-11-23
+### Added
+- Full-fidelity formatting. With "Keep full formatting" (Preferences › Types, on by default) DittoMac also saves web
+  archives, RTFD (rich text with inline images), JPEG, GIF, HEIC, PDF and links, byte for byte, so a copy from Safari,
+  Notes or Pages pastes back with its headings, styles and pictures. Each format is capped at 64 MB.
+- Clips that only carry rich text (RTFD- or HTML-only sources) get a plain-text description and full-text search.
+- Paste formats: Original (keep all formatting), Plain Text, Rich Text (no images), Markdown and HTML Source.
+  Right-click › **Paste As** and **Copy As** submenus, for one clip or several.
+- ⌥⇧Return pastes as Markdown. HTML is converted by a new built-in converter (headings, nested lists, tables, code,
+  quotes, links and images); RTF/RTFD by font size and traits.
+- Preferences › Quick Paste: **Default paste format** (Return, double-click, ⌘1–⌘0 and global paste hotkeys) and
+  **Always paste plain text into these apps**.
+- **Save Clip As…** (⌘⇧S): Rich Text Document (.rtf, or .rtfd when the clip has images), Web Archive, HTML, Markdown,
+  Plain Text or PNG. With several clips selected, one file per clip is written to a folder.
+- Clip rows show a subtle symbol for clips that keep formatting, and for clips with an image as well as text.
+- The preview shows RTFD with its images and lists the clip's formats.
+
+### Security
+- Web archives and HTML are never rendered by WebKit directly: previews go through the allow-list sanitiser, and
+  Markdown / plain-text conversion is pure Swift. Nothing is fetched from the network. Links are kept only for
+  http, https and mailto. RTFD previews keep image attachments only, and images too large to decode are shown as
+  thumbnails.
+
 ## [1.0.1] - 2026-11-23
 ### Changed
 - DittoMac now starts with your Mac by default. It registers itself as a login item on first launch. Turn this off in

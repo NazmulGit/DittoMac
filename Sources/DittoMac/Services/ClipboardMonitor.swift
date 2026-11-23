@@ -26,9 +26,21 @@ final class ClipboardMonitor: ClipboardMonitoring {
         "NSFilenamesPboardType", "Apple PNG pasteboard type", "NeXT TIFF v4.0 pasteboard type",
         "Apple URL pasteboard type", "CorePasteboardFlavorType 0x75726C20", "public.url", "public.url-name",
         "com.apple.pasteboard.promised-file-url", "com.apple.pasteboard.promised-file-content-type",
-        "com.apple.NSFilePromiseItemMetaData", "com.apple.webarchive",
+        "com.apple.NSFilePromiseItemMetaData", "com.apple.webarchive", "Apple Web Archive pasteboard type",
         "org.dittomac.internal",
     ]
+
+    /// Full-formatting set (Settings.keepFullFormatting): pasteboard type read → type stored. Kept byte for byte.
+    static let fullFormattingSources: [(read: String, store: String)] = [
+        (ClipUTI.webArchive, ClipUTI.webArchive), (ClipUTI.legacyWebArchive, ClipUTI.webArchive),
+        (ClipUTI.flatRTFD, ClipUTI.flatRTFD), (ClipUTI.rtfd, ClipUTI.rtfd),
+        (ClipUTI.jpeg, ClipUTI.jpeg), (ClipUTI.gif, ClipUTI.gif), (ClipUTI.heic, ClipUTI.heic), (ClipUTI.pdf, ClipUTI.pdf),
+        (ClipUTI.url, ClipUTI.url), (ClipUTI.urlName, ClipUTI.urlName),
+    ]
+    /// A single full-formatting format larger than this is skipped (the clip's other formats are still stored).
+    static let maxRichFormatBytes = 64 * 1024 * 1024
+    /// Rich formats larger than this aren't parsed to derive a plain-text description.
+    static let maxDeriveTextBytes = 16 * 1024 * 1024
 
     private var timer: Timer?
     private var lastChangeCount: Int
@@ -170,6 +182,21 @@ final class ClipboardMonitor: ClipboardMonitoring {
                 imageSize = NSSize(width: rep.pixelsWide, height: rep.pixelsHigh)
             }
         }
+        // Full formatting: web archives (HTML + embedded images), RTFD (text with inline images), JPEG/GIF/HEIC,
+        // PDF and links, independent of the enabled-types list.
+        var richTypes = Set<String>()
+        if settings.keepFullFormatting {
+            for (read, storeAs) in Self.fullFormattingSources where typeNames.contains(read) && !richTypes.contains(storeAs) {
+                guard let d = pb.data(forType: NSPasteboard.PasteboardType(read)), !d.isEmpty,
+                      d.count <= Self.maxRichFormatBytes else { continue }
+                formats.append(ClipFormat(type: storeAs, data: d))
+                richTypes.insert(storeAs)
+            }
+            if imageSize == nil, let img = formats.first(where: { [ClipUTI.jpeg, ClipUTI.gif, ClipUTI.heic].contains($0.type) }),
+               let px = ImageProbe.pixelSize(img.data) {
+                imageSize = NSSize(width: px.width, height: px.height)
+            }
+        }
         if wants(ClipUTI.fileURL),
            let urls = pb.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL],
            !urls.isEmpty {
@@ -179,7 +206,7 @@ final class ClipboardMonitor: ClipboardMonitoring {
         // Extra / custom types.
         for t in types {
             let raw = t.rawValue
-            if Self.handledTypes.contains(raw) || Self.skipTypes.contains(raw) { continue }
+            if Self.handledTypes.contains(raw) || Self.skipTypes.contains(raw) || richTypes.contains(raw) { continue }
             if all {
                 if raw.hasPrefix("dyn.") || raw.hasPrefix("CorePasteboardFlavorType") || raw.hasPrefix("NeXT ")
                     || raw.hasPrefix("Apple ") { continue }
@@ -188,8 +215,28 @@ final class ClipboardMonitor: ClipboardMonitoring {
         }
         guard !formats.isEmpty else { return false }
 
+        // Rich-only sources (RTFD from Notes, HTML-only web content): derive plain text for the description and
+        // full-text search. RTF/RTFD are parsed by AppKit locally; HTML/web archives by DittoCore (no WebKit).
+        if text == nil, fileNames.isEmpty,
+           formats.contains(where: { ClipUTI.richTextTypes.contains($0.type) && $0.data.count <= Self.maxDeriveTextBytes }) {
+            let parseable = formats.filter { $0.data.count <= Self.maxDeriveTextBytes }
+            if let derived = PasteContent.derivedPlainText(from: parseable) {
+                text = derived
+                formats.insert(ClipFormat(type: ClipUTI.plainText, data: Data(derived.utf8)), at: 0)
+            }
+        }
+
         let maxBytes = settings.maxClipSizeBytes
-        if maxBytes > 0, formats.reduce(0, { $0 + $1.data.count }) > maxBytes { return false }
+        if maxBytes > 0 {
+            // Over the total cap: drop full-formatting extras (largest first) before rejecting the clip.
+            var total = formats.reduce(0) { $0 + $1.data.count }
+            while total > maxBytes,
+                  let idx = formats.indices.filter({ richTypes.contains(formats[$0].type) }).max(by: { formats[$0].data.count < formats[$1].data.count }) {
+                total -= formats[idx].data.count
+                formats.remove(at: idx)
+            }
+            if total > maxBytes { return false }
+        }
 
         // Copy rules.
         let outcome = CopyRuleEngine.evaluate(rules: settings.copyRules, text: text, appBundleID: bundleID, appName: appName)
@@ -197,7 +244,7 @@ final class ClipboardMonitor: ClipboardMonitoring {
         if let newText = outcome.text, newText != text, text != nil {
             text = newText
             // Rich formats no longer match the rewritten text.
-            formats.removeAll { $0.type == ClipUTI.plainText || $0.type == ClipUTI.rtf || $0.type == ClipUTI.html }
+            formats.removeAll { $0.type == ClipUTI.plainText || ClipUTI.richTextTypes.contains($0.type) }
             formats.insert(ClipFormat(type: ClipUTI.plainText, data: Data(newText.utf8)), at: 0)
         }
         if outcome.stripToPlain, text != nil {

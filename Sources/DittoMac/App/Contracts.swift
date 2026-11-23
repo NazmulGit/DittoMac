@@ -39,11 +39,18 @@ protocol PasteServicing: AnyObject {
     var targetApp: NSRunningApplication? { get set }
     /// Put clips on the pasteboard (multi-clip → joined text per Settings), optionally transformed,
     /// then (if sendPaste) re-activate targetApp and post ⌘V. Updates lastPasteDate/order per Settings.
+    /// No transform → the default paste format (`defaultPasteFormat()`).
     func paste(clipIDs: [Int64], transform: TextTransform?, sendPaste: Bool, moveToTop: Bool)
     /// Paste with stitched images (multi-image) horizontally or vertically.
     func pasteImagesStitched(clipIDs: [Int64], vertical: Bool)
+    /// Paste in an explicit format (Paste As ▸). `.original` = every stored format; others convert (see PasteFormat).
+    func paste(clipIDs: [Int64], format: PasteFormat, sendPaste: Bool, moveToTop: Bool)
+    /// Format a default paste (Return, double-click, ⌘1…⌘0, global hotkeys) uses for the current `targetApp`.
+    func defaultPasteFormat() -> PasteFormat
     /// Copy only (no ⌘V), e.g. ⌘C in the list.
     func copyToPasteboard(clipIDs: [Int64], transform: TextTransform?)
+    /// Copy only, in an explicit format (Copy As ▸). Returns false (with a HUD message) when nothing was written.
+    @discardableResult func copyToPasteboard(clipIDs: [Int64], format: PasteFormat) -> Bool
     /// Low-level: write formats to the general pasteboard tagged as internal. Returns new changeCount.
     @discardableResult func writeToPasteboard(_ formats: [ClipFormat]) -> Int
     /// Post a synthetic ⌘<key> (e.g. "c" for copy, "v" for paste) to the frontmost app.

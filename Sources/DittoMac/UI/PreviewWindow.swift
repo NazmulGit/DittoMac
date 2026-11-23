@@ -16,7 +16,7 @@ private final class PreviewPanel: NSPanel {
 /// The "description window": shows a clip as image / RTF / HTML / plain text.
 @MainActor
 final class PreviewWindowController: NSWindowController, NSWindowDelegate {
-    enum ViewMode: String { case text = "Text", rtf = "RTF", html = "HTML", image = "Image" }
+    enum ViewMode: String { case text = "Text", rtfd = "Rich Text", rtf = "RTF", html = "HTML", image = "Image" }
 
     /// Navigation context for N / P. The popup sets this to the visible clip ids (in order).
     static var clipIDs: [Int64] = []
@@ -24,6 +24,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate {
 
     static let maxHTMLBytes = 2 * 1024 * 1024
     static let maxRTFBytes = 10 * 1024 * 1024
+    static let maxRTFDBytes = 64 * 1024 * 1024
     static let maxTextChars = 5_000_000
 
     private let state: AppState
@@ -141,9 +142,11 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate {
         formats = (try? state.store.formats(clipID: clipID)) ?? []
         func has(_ t: String) -> Bool { formats.contains { $0.type == t } }
         var modes: [ViewMode] = []
-        if has(ClipUTI.png) || has(ClipUTI.tiff) { modes.append(.image) }
+        let summary = ClipFormatSummary(types: formats.map(\.type))
+        if summary.hasImage { modes.append(.image) }
+        if summary.hasRTFD { modes.append(.rtfd) }
         if has(ClipUTI.rtf) { modes.append(.rtf) }
-        if has(ClipUTI.html) { modes.append(.html) }
+        if has(ClipUTI.html) || has(ClipUTI.webArchive) { modes.append(.html) }
         modes.append(.text)
         available = modes
         viewAsPopup.removeAllItems()
@@ -165,7 +168,8 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate {
         if c.shortcut != 0 { parts.append("Shortcut \(KeyCombo(encoded: c.shortcut).displayString)" + (c.globalShortcut ? " (Global)" : "")) }
         if c.isSticky { parts.append("Sticky") }
         if c.parentID != -1, let g = (try? state.store.clip(id: c.parentID)) ?? nil { parts.append("In group \(g.text)") }
-        return parts.joined(separator: " | ")
+        let names = ClipUTI.displayNames(formats.map(\.type))
+        return parts.joined(separator: " | ") + (names.isEmpty ? "" : "\nFormats: " + names.joined(separator: ", "))
     }
 
     // MARK: rendering
@@ -175,6 +179,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate {
         if let d = data(ClipUTI.plainText) { return String(decoding: d.prefix(Self.maxTextChars * 4), as: UTF8.self).prefix(Self.maxTextChars).description }
         if let d = data(ClipUTI.fileURL) { return String(decoding: d, as: UTF8.self) }
         if let a = rtfAttributed() { return a.string }
+        if let a = rtfdAttributed() { return a.string.replacingOccurrences(of: "\u{FFFC}", with: "") }
         if let a = htmlAttributed() { return a.string }
         if formats.isEmpty { return "(no data)" }
         return formats.map { "\($0.type) — \(ByteCountFormatter.string(fromByteCount: Int64($0.data.count), countStyle: .file))" }.joined(separator: "\n")
@@ -185,9 +190,18 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate {
         return SafeRichText.rtf(d, maxBytes: Self.maxRTFBytes)
     }
 
+    /// RTFD with local image attachments (sanitised: see SafeRichText.rtfd).
+    private func rtfdAttributed() -> NSAttributedString? {
+        guard let d = data(ClipUTI.flatRTFD) ?? data(ClipUTI.rtfd) else { return nil }
+        return SafeRichText.rtfd(d, maxBytes: Self.maxRTFDBytes)
+    }
+
+    /// Stored HTML, else a web archive's main HTML — always through the sanitiser (sub-resources never loaded;
+    /// the web archive itself is never handed to WebKit).
     private func htmlAttributed() -> NSAttributedString? {
-        guard let d = data(ClipUTI.html) else { return nil }
-        return SafeRichText.html(d, maxBytes: Self.maxHTMLBytes)
+        if let d = data(ClipUTI.html) { return SafeRichText.html(d, maxBytes: Self.maxHTMLBytes) }
+        guard let d = data(ClipUTI.webArchive), let html = WebArchive.mainHTML(d) else { return nil }
+        return SafeRichText.html(Data(html.utf8), maxBytes: Self.maxHTMLBytes)
     }
 
     /// Full decode only for images under `ImageProbe.maxDecodePixels`; bigger ones are shown downsampled.
@@ -201,7 +215,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate {
         let monoOn = monoCheck.state == .on
         switch mode {
         case .image:
-            let d = data(ClipUTI.png) ?? data(ClipUTI.tiff)
+            let d = PasteContent.imageData(from: formats)
             guard let d, let img = previewImage(d) else { mode = .text; viewAsPopup.selectItem(withTitle: "Text"); render(); return }
             monoCheck.isHidden = true; wrapCheck.isHidden = true
             if let rep = img.representations.first, rep.pixelsWide > 0 {
@@ -215,12 +229,14 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate {
             scroll.documentView = imageView
             scroll.layoutSubtreeIfNeeded()
             zoomToFit()
-        case .rtf, .html, .text:
+        case .rtfd, .rtf, .html, .text:
             monoCheck.isHidden = mode != .text; wrapCheck.isHidden = false
             scroll.allowsMagnification = false
             scroll.magnification = 1
             scroll.documentView = textView
-            if mode == .rtf, let a = rtfAttributed() {
+            if mode == .rtfd, let a = rtfdAttributed() {
+                textView.textStorage?.setAttributedString(a)
+            } else if mode == .rtf, let a = rtfAttributed() {
                 textView.textStorage?.setAttributedString(a)
             } else if mode == .html, let a = htmlAttributed() {
                 textView.textStorage?.setAttributedString(a)

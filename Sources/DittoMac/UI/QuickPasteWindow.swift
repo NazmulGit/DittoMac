@@ -66,6 +66,7 @@ final class QuickPasteController: NSObject, NSWindowDelegate, NSTableViewDataSou
     private(set) var clips: [Clip] = []
     private(set) var totalCount = 0
     private var kindCache: [Int64: ClipKind] = [:]
+    private var summaryCache: [Int64: ClipFormatSummary] = [:]
     private var loadingMore = false
     private var dirty = true
     private var groupRoots: [QuickPasteGroupNode] = []
@@ -515,6 +516,7 @@ final class QuickPasteController: NSObject, NSWindowDelegate, NSTableViewDataSou
         clips = (try? store.clips(f)) ?? []
         totalCount = clips.count < Self.pageSize ? clips.count : ((try? store.count(f)) ?? clips.count)
         kindCache.removeAll(keepingCapacity: true)
+        summaryCache.removeAll(keepingCapacity: true)
         tableView.reloadData()
         var rows = IndexSet()
         if !keepIDs.isEmpty {
@@ -563,7 +565,15 @@ final class QuickPasteController: NSObject, NSWindowDelegate, NSTableViewDataSou
         let types = ((try? store.formatTypes(clipID: clip.id)) ?? []).map(\.type)
         let k = ClipKind.classify(types: types, isGroup: clip.isGroup)
         kindCache[clip.id] = k
+        summaryCache[clip.id] = ClipFormatSummary(types: types)
         return k
+    }
+
+    /// Which kinds of content the clip carries (rich text / image indicators on rows).
+    func formatSummary(of clip: Clip) -> ClipFormatSummary {
+        if let s = summaryCache[clip.id] { return s }
+        _ = kind(of: clip)
+        return summaryCache[clip.id] ?? ClipFormatSummary(types: [])
     }
 
     func refreshLocalShortcuts() {
@@ -860,6 +870,8 @@ final class QuickPasteController: NSObject, NSWindowDelegate, NSTableViewDataSou
             showPasted: settings.showIfClipWasPasted && clip.wasPasted && !clip.isGroup,
             showSymbols: currentGroupID == nil,
             highlighter: highlighter,
+            richIndicator: !clip.isGroup && formatSummary(of: clip).hasRichText,
+            imageIndicator: !clip.isGroup && formatSummary(of: clip).hasImage && formatSummary(of: clip).hasText,
             rich: settings.drawRTF && !clip.isGroup ? ClipRTFCache.shared.attributed(for: clip.id, store: store) : nil)
         loadMoreIfNeeded(row: row)
         return cell

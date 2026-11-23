@@ -72,6 +72,10 @@ struct ClipRowModel {
     var showPasted: Bool
     var showSymbols: Bool     // "!" (in group) only meaningful in history view
     var highlighter: QuickPasteHighlighter?
+    /// Clip keeps formatting (RTF / RTFD / HTML / web archive): small "textformat" symbol.
+    var richIndicator = false
+    /// Clip has an image as well as text: small "photo" symbol.
+    var imageIndicator = false
     /// Rich description (from the clip's RTF) when "Draw rich text" is on; nil falls back to plain text.
     var rich: NSAttributedString?
 }
@@ -94,6 +98,8 @@ final class ClipCellView: NSTableCellView {
 
     private static let folderImage = NSImage(systemSymbolName: "folder.fill", accessibilityDescription: "Group")
     private static let pinImage = NSImage(systemSymbolName: "pin.fill", accessibilityDescription: "Sticky")
+    private static let richImage = NSImage(systemSymbolName: "textformat", accessibilityDescription: "Keeps formatting")
+    private static let photoImage = NSImage(systemSymbolName: "photo", accessibilityDescription: "Has image")
 
     override func draw(_ dirtyRect: NSRect) {
         guard let m = model else { return }
@@ -118,6 +124,16 @@ final class ClipCellView: NSTableCellView {
             let r = NSRect(x: rect.maxX - rightInset - s, y: rect.minY + (lineH - s) / 2, width: s, height: s)
             Self.tinted(pin, secondary).draw(in: r)
             rightInset += s + 4
+        }
+        // Format indicators (subtle): rich formatting kept, image alongside text.
+        for (show, symbol) in [(m.imageIndicator, Self.photoImage), (m.richIndicator, Self.richImage)] {
+            guard show, let img = symbol, img.size.width > 0 else { continue }
+            let h = min(lineH * 0.75, 11)
+            let w = h * img.size.width / img.size.height
+            let r = NSRect(x: rect.maxX - rightInset - w, y: rect.minY + (lineH - h) / 2, width: w, height: h)
+            Self.tinted(img, secondary).draw(in: r, from: .zero, operation: .sourceOver, fraction: 1,
+                                                                     respectFlipped: true, hints: nil)
+            rightInset += w + 4
         }
         rect.size.width -= rightInset
 
@@ -434,7 +450,7 @@ final class ClipThumbnailCache {
         pending.insert(key)
         sizes[id, default: []].insert(maxPixel)
         DispatchQueue.global(qos: .userInitiated).async {
-            let data = (try? store.data(clipID: id, type: ClipUTI.png)) ?? (try? store.data(clipID: id, type: ClipUTI.tiff))
+            let data = PasteContent.imageData(clipID: id, store: store)
             var cg: CGImage?
             if let data, let src = CGImageSourceCreateWithData(data as CFData, nil) {
                 let opts: [CFString: Any] = [

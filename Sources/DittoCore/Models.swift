@@ -15,6 +15,77 @@ public enum ClipUTI {
     public static let png = "public.png"
     public static let tiff = "public.tiff"
     public static let fileURL = "public.file-url"
+
+    // Rich formats kept when `Settings.keepFullFormatting` is on (exact bytes, no re-encoding).
+    public static let webArchive = "com.apple.webarchive"
+    /// Pre-UTI name some apps still write for web archives; normalised to `webArchive` on capture.
+    public static let legacyWebArchive = "Apple Web Archive pasteboard type"
+    public static let flatRTFD = "com.apple.flat-rtfd"       // NSPasteboard.PasteboardType.rtfd
+    public static let rtfd = "public.rtfd"
+    public static let jpeg = "public.jpeg"
+    public static let gif = "com.compuserve.gif"
+    public static let heic = "public.heic"
+    public static let pdf = "com.adobe.pdf"
+    public static let url = "public.url"
+    public static let urlName = "public.url-name"
+
+    /// The full-formatting set captured independently of `Settings.enabledTypes`.
+    public static let fullFormattingTypes: [String] = [webArchive, flatRTFD, rtfd, jpeg, gif, pdf, url, urlName, heic]
+    /// Image formats, in the order they are preferred for display / export.
+    public static let imageTypes: [String] = [png, tiff, jpeg, gif, heic]
+    /// Formats that carry styled text (headings, bold, links …).
+    public static let richTextTypes: [String] = [rtf, flatRTFD, rtfd, html, webArchive]
+
+    /// Human-readable name for a stored format type (unknown types are returned unchanged).
+    public static func displayName(_ type: String) -> String {
+        switch type {
+        case plainText, "public.utf16-plain-text": return "Plain Text"
+        case rtf: return "Rich Text (RTF)"
+        case flatRTFD, rtfd: return "Rich Text with Attachments (RTFD)"
+        case html: return "HTML"
+        case webArchive, legacyWebArchive: return "Web Archive"
+        case png: return "PNG Image"
+        case tiff: return "TIFF Image"
+        case jpeg: return "JPEG Image"
+        case gif: return "GIF Image"
+        case heic: return "HEIC Image"
+        case pdf: return "PDF"
+        case fileURL: return "File References"
+        case url: return "Link"
+        case urlName: return "Link Title"
+        default: return type
+        }
+    }
+
+    /// Distinct human-readable names for a list of types, in order (e.g. both RTFD types collapse into one).
+    public static func displayNames(_ types: [String]) -> [String] {
+        var seen = Set<String>()
+        return types.map(displayName).filter { seen.insert($0).inserted }
+    }
+}
+
+/// What kinds of content a clip carries (for row indicators, menus and the Save As panel).
+public struct ClipFormatSummary: Sendable, Equatable {
+    public var hasText: Bool
+    public var hasRichText: Bool
+    public var hasImage: Bool
+    public var hasWebArchive: Bool
+    public var hasRTFD: Bool
+    public var hasHTML: Bool
+    public var hasRTF: Bool
+    public var hasFiles: Bool
+
+    public init(types: [String]) {
+        let set = Set(types)
+        hasText = set.contains(ClipUTI.plainText) || set.contains("public.utf16-plain-text")
+        hasRTF = set.contains(ClipUTI.rtf)
+        hasRTFD = set.contains(ClipUTI.flatRTFD) || set.contains(ClipUTI.rtfd)
+        hasHTML = set.contains(ClipUTI.html)
+        hasWebArchive = set.contains(ClipUTI.webArchive)
+        hasRichText = hasRTF || hasRTFD || hasHTML || hasWebArchive
+        hasImage = ClipUTI.imageTypes.contains(where: set.contains)
+        hasFiles = set.contains(ClipUTI.fileURL)
+    }
 }
 
 public enum ClipKind: String, Sendable, CaseIterable {
@@ -24,10 +95,10 @@ public enum ClipKind: String, Sendable, CaseIterable {
     public static func classify(types: [String], isGroup: Bool = false) -> ClipKind {
         if isGroup { return .group }
         let set = Set(types)
-        if set.contains(ClipUTI.png) || set.contains(ClipUTI.tiff) { return .image }
+        if ClipUTI.imageTypes.contains(where: set.contains) { return .image }
         if set.contains(ClipUTI.fileURL) { return .files }
-        if set.contains(ClipUTI.rtf) { return .richText }
-        if set.contains(ClipUTI.html) { return .html }
+        if set.contains(ClipUTI.rtf) || set.contains(ClipUTI.flatRTFD) || set.contains(ClipUTI.rtfd) { return .richText }
+        if set.contains(ClipUTI.html) || set.contains(ClipUTI.webArchive) { return .html }
         if set.contains(ClipUTI.plainText) { return .text }
         return .other
     }

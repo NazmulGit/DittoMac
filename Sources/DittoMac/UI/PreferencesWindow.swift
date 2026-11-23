@@ -305,6 +305,21 @@ struct URLTemplateField: View {
 struct QuickPastePrefs: View {
     @ObservedObject var m: PrefsModel
 
+    private var runningApps: [(name: String, bundle: String)] {
+        NSWorkspace.shared.runningApplications
+            .filter { $0.activationPolicy == .regular }
+            .compactMap { a in a.bundleIdentifier.map { (a.localizedName ?? $0, $0) } }
+            .sorted { $0.name.lowercased() < $1.name.lowercased() }
+    }
+
+    private func addPlainTextApp(_ bundle: String) {
+        let cur = m.s.plainTextApps.trimmingCharacters(in: .whitespaces)
+        let items = cur.split(separator: ";").map { $0.trimmingCharacters(in: .whitespaces) }
+        guard !items.contains(bundle) else { return }
+        m.s.plainTextApps = cur.isEmpty ? bundle : cur + ";" + bundle
+        m.changed()
+    }
+
     var body: some View {
         Form {
             Section("Window") {
@@ -346,6 +361,23 @@ struct QuickPastePrefs: View {
                 Toggle("Show pasted indicator", isOn: m.b(\.showIfClipWasPasted))
                 Toggle("Prompt when deleting clips", isOn: m.b(\.promptWhenDeletingClips))
                 Toggle("Prompt for new group name", isOn: m.b(\.promptForNewGroupName))
+            }
+            Section("Paste format") {
+                Picker("Default paste format", selection: m.b(\.defaultPasteFormat)) {
+                    ForEach(PasteFormat.allCases, id: \.self) { Text($0.title).tag($0) }
+                }
+                Text("Used by Return, double-click, ⌘1…⌘0 and the global paste hotkeys. ⇧Return always pastes plain text, ⌥⇧Return Markdown; right-click › Paste As offers every format.")
+                    .font(.caption).foregroundStyle(.secondary)
+                TextField("Always paste plain text into these apps", text: m.b(\.plainTextApps))
+                HStack {
+                    Menu("Add running app…") {
+                        ForEach(runningApps, id: \.bundle) { a in Button(a.name) { addPlainTextApp(a.bundle) } }
+                    }
+                    .fixedSize()
+                    Spacer()
+                }
+                Text("Bundle IDs or app names separated by ; (wildcards * and ?), e.g. com.apple.Terminal;*Code*.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             Section("Pasting") {
                 Toggle("Update order on paste (move pasted clip to top)", isOn: m.b(\.updateTimeOnPaste))

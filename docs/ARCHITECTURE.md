@@ -22,10 +22,14 @@ Sources/DittoCore/          pure logic, no AppKit (Foundation, SQLite3, CryptoKi
   ImportExport.swift        export/import .dittoclips (SQLite), import Windows Ditto.db, text export helpers
   FriendsProtocol.swift     secure LAN sync framing + crypto (PBKDF2 → HKDF → ChaChaPoly), caps, pure/testable
   ThemeData.swift           12 Ditto themes + System as hex strings
+  PasteFormat.swift         PasteFormat (original/plainText/richText/markdown/htmlSource) + per-app plain-text matcher
+  HTMLToMarkdown.swift      pure-Swift HTML → GitHub Markdown / plain text (bounded, no WebKit); entity decoding
+  WebArchive.swift          main HTML of a com.apple.webarchive via PropertyListSerialization (no WebKit)
 Sources/DittoMac/
   App/main.swift, App/AppDelegate.swift, App/AppState.swift (wires services)
   Services/ClipboardMonitor.swift   NSPasteboard polling → ClipStore
-  Services/PasteService.swift       write clip to pasteboard (with transforms), restore focus, ⌘V via CGEvent
+  Services/PasteService.swift       write clip to pasteboard (with transforms / paste formats), restore focus, ⌘V via CGEvent
+  Services/RichFormats.swift        PasteContent conversions per PasteFormat, RTFToMarkdown (AppKit)
   Services/HotKeyCenter.swift       Carbon RegisterEventHotKey; KeyCombo model + recorder helpers
   Services/CopyBuffers.swift        5 copy buffers (global copy/paste hotkeys)
   Services/FriendsService.swift     Network.framework listener/sender using FriendsProtocol
@@ -33,7 +37,8 @@ Sources/DittoMac/
   UI/StatusItemController.swift     menu-bar icon + menu
   UI/QuickPasteWindow.swift         the popup (NSPanel): search field, clip table, groups sidebar, status line
   UI/ClipTableView.swift            NSTableView rows: n-lines text, thumbnails, colour swatch, symbols, first-ten index
-  UI/ClipContextMenu.swift          right-click menu (all actions)
+  UI/ClipContextMenu.swift          right-click menu (all actions, Paste As ▸ / Copy As ▸)
+  UI/SaveClipAs.swift               Save Clip As… (.rtf/.rtfd, .webarchive, .html, .md, .txt, .png)
   UI/PreviewWindow.swift            description window (text/RTF/HTML/image zoom)
   UI/EditorWindow.swift             built-in clip editor (plain/rich text)
   UI/PropertiesWindow.swift         clip properties
@@ -191,7 +196,7 @@ public struct ThemeSpec: Sendable { public var name: String; public var colors: 
 
 ## Key behaviours (from upstream, see docs/kb/*)
 - Capture loop polls every 0.5 s; skips concealed/transient markers, our own writes, excluded apps, rules → ignore, oversize.
-- Stored formats per clip: `public.utf8-plain-text`, `public.rtf`, `public.html`, `public.png` (TIFF converted to PNG), `public.file-url` (newline-joined), plus any enabled extra types.
+- Stored formats per clip: `public.utf8-plain-text`, `public.rtf`, `public.html`, `public.png` (TIFF converted to PNG), `public.file-url` (newline-joined), plus any enabled extra types, plus (when `keepFullFormatting`) the full-formatting set `ClipUTI.fullFormattingTypes` — see docs/kb/rich-formats.md.
 - Sort: sticky DESC, groups-first-as-in-upstream (`bIsGroup` ASC means non-groups first — keep upstream SQL), clipOrder DESC.
 - Paste: write formats to pasteboard tagged `org.dittomac.internal`, reactivate prior app, after 80 ms post ⌘V.
 
@@ -235,11 +240,16 @@ Non-global clip/group shortcuts work inside the popup (paste clip / open group; 
 ### Capture (ClipboardMonitor)
 changeCount poll → skip if disconnected / ≤ ignored count / concealed-transient markers / `org.dittomac.internal` →
 wait `saveClipDelayMS` (≤ 2 s, re-checks changeCount) → include/exclude app wildcards (bundle id or name) → read
-text/RTF/HTML/PNG (TIFF→PNG)/file URLs + enabled extra types (or all non-legacy types) → max size → Copy Rules
+text/RTF/HTML/PNG (TIFF→PNG)/file URLs + full-formatting set (web archive, RTFD, JPEG/GIF/HEIC, PDF, URL; 64 MiB
+per format) + enabled extra types (or all non-legacy types) → derive plain text for rich-only clips → max size (drops
+rich extras first) → Copy Rules
 (ignore, replace text — drops RTF/HTML, strip to plain, stickies, never-auto-delete, move to group by name — created
 if missing) → description → `captureNextClip` group → `store.addClip` → sound, `recordCopy`, friends auto-send, `clipsChanged`.
 
 ### Paste (PasteService)
+A paste without transform uses `defaultPasteFormat()` (Settings.defaultPasteFormat, or plain text when the target
+matches Settings.plainTextApps); `paste(clipIDs:format:…)` / `copyToPasteboard(clipIDs:format:)` take an explicit
+PasteFormat (conversions in RichFormats.swift; `.original` = all stored formats).
 Formats are written as NSPasteboardItems (one per extra file URL) tagged `org.dittomac.internal`; the resulting
 changeCount goes to `monitor.ignoreChangeCount`. Any transform → text only (Remove Line Feeds also keeps a transformed
 RTF). Multi-select → `MultiPaste.join(separator, reverse)` (+ saved as a new clip if `saveMultiPaste`; file-only
@@ -262,8 +272,10 @@ gear button = clip menu, ellipsis button = "More" (window) menu.
 ### Keyboard map (popup)
 | Key | Action |
 |---|---|
-| Return / Enter, double-click | paste selection (group → open it). In search with an un-applied query: run search |
+| Return / Enter, double-click | paste selection in the default paste format (group → open it). In search with an un-applied query: run search |
 | ⇧Return | paste as plain text |
+| ⌥⇧Return | paste as Markdown |
+| ⌘⇧S | Save Clip As… |
 | ⌥Return, ⌘I | properties |
 | ⌘1…⌘9, ⌘0 | paste first-ten position (labels follow `firstTenHotKeysStart`) |
 | ⌥⌘1…⌥⌘0 | plain-text paste of position |

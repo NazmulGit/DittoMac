@@ -17,6 +17,10 @@ enum PasteContent {
            let a = NSAttributedString(rtf: f.data, documentAttributes: nil) { return a.string }
         if let f = formats.first(where: { $0.type == ClipUTI.html }),
            let a = SafeRichText.html(f.data) { return a.string }   // sanitised: no remote loads
+        if let a = rtfdAttributed(from: formats) { return strippingAttachments(a).string }
+        if let d = data(formats, ClipUTI.webArchive), let html = WebArchive.mainHTML(d) {
+            return HTMLToMarkdown.plainText(html)                 // pure Swift: never WebKit for web archives
+        }
         if let f = formats.first(where: { $0.type == ClipUTI.fileURL }) {
             return fileURLs(from: f.data).map { $0.isFileURL ? $0.path : $0.absoluteString }.joined(separator: "\n")
         }
@@ -29,16 +33,20 @@ enum PasteContent {
         return text(from: formats)
     }
 
+    /// First stored image (PNG, TIFF, JPEG, GIF, HEIC — in that order).
     static func imageData(from formats: [ClipFormat]) -> Data? {
-        if let f = formats.first(where: { $0.type == ClipUTI.png }) { return f.data }
-        if let f = formats.first(where: { $0.type == ClipUTI.tiff }) { return f.data }
+        for t in ClipUTI.imageTypes { if let f = formats.first(where: { $0.type == t }) { return f.data } }
+        return nil
+    }
+
+    static func imageData(clipID: Int64, store: ClipStore) -> Data? {
+        for t in ClipUTI.imageTypes { if let d = try? store.data(clipID: clipID, type: t) { return d } }
         return nil
     }
 
     static func image(clipID: Int64, store: ClipStore) -> NSImage? {
-        if let d = try? store.data(clipID: clipID, type: ClipUTI.png) { return NSImage(data: d) }
-        if let d = try? store.data(clipID: clipID, type: ClipUTI.tiff) { return NSImage(data: d) }
-        return nil
+        guard let d = imageData(clipID: clipID, store: store), ImageProbe.isSafeToDecode(d) else { return nil }
+        return NSImage(data: d)
     }
 
     static func fileURLs(from data: Data) -> [URL] {
@@ -93,11 +101,25 @@ final class PasteService: PasteServicing {
 
     // MARK: PasteServicing
 
+    /// Default paste: no transform → `defaultPasteFormat()` (Settings, or plain text for `plainTextApps`).
     func paste(clipIDs: [Int64], transform: TextTransform?, sendPaste: Bool, moveToTop: Bool) {
+        let format: PasteFormat = transform == nil ? defaultPasteFormat() : .original
+        paste(clipIDs, format: format, transform: transform, sendPaste: sendPaste, moveToTop: moveToTop)
+    }
+
+    func paste(clipIDs: [Int64], format: PasteFormat, sendPaste: Bool, moveToTop: Bool) {
+        paste(clipIDs, format: format, transform: nil, sendPaste: sendPaste, moveToTop: moveToTop)
+    }
+
+    private func paste(_ clipIDs: [Int64], format: PasteFormat, transform: TextTransform?, sendPaste: Bool, moveToTop: Bool) {
         let ids = pastableIDs(clipIDs)
         guard !ids.isEmpty else { return }
-        guard loadToPasteboard(ids, transform: transform) else { return }
+        guard loadToPasteboard(ids, format: format, transform: transform) else { return }
         finishPaste(ids: ids, sendPaste: sendPaste, moveToTop: moveToTop)
+    }
+
+    func defaultPasteFormat() -> PasteFormat {
+        settings.defaultPasteFormat(bundleID: targetApp?.bundleIdentifier ?? "", appName: targetApp?.localizedName ?? "")
     }
 
     func pasteImagesStitched(clipIDs: [Int64], vertical: Bool) {
@@ -125,7 +147,14 @@ final class PasteService: PasteServicing {
     func copyToPasteboard(clipIDs: [Int64], transform: TextTransform?) {
         let ids = pastableIDs(clipIDs)
         guard !ids.isEmpty else { return }
-        _ = loadToPasteboard(ids, transform: transform)
+        _ = loadToPasteboard(ids, format: .original, transform: transform)
+    }
+
+    @discardableResult
+    func copyToPasteboard(clipIDs: [Int64], format: PasteFormat) -> Bool {
+        let ids = pastableIDs(clipIDs)
+        guard !ids.isEmpty else { return false }
+        return loadToPasteboard(ids, format: format, transform: nil)
     }
 
     @discardableResult
@@ -263,14 +292,27 @@ final class PasteService: PasteServicing {
     }
 
     /// Writes the given clips to the pasteboard. Returns false (with a HUD message) if nothing could be written.
-    private func loadToPasteboard(_ ids: [Int64], transform: TextTransform?) -> Bool {
+    private func loadToPasteboard(_ ids: [Int64], format: PasteFormat, transform: TextTransform?) -> Bool {
+        // .plainText behaves exactly like the Plain Text transform (strip everything).
+        let transform = transform ?? (format == .plainText ? .plainText : nil)
+        if transform == nil, ids.count > 1, format == .markdown || format == .htmlSource || format == .richText {
+            return loadJoined(ids, format: format)
+        }
         if ids.count == 1 {
             guard let formats = try? store.formats(clipID: ids[0]), !formats.isEmpty else {
                 state.message("Clip has no data")
                 return false
             }
             guard let transform else {
-                writeToPasteboard(formats)
+                if format == .original {
+                    writeToPasteboard(formats)
+                    return true
+                }
+                guard let out = PasteContent.formats(for: format, from: formats) else {
+                    state.message("Clip has no text for “\(format.title)”")
+                    return false
+                }
+                writeToPasteboard(out)
                 return true
             }
             guard let text = PasteContent.text(from: formats) else {
@@ -299,7 +341,7 @@ final class PasteService: PasteServicing {
                 files.append(contentsOf: PasteContent.fileURLs(from: f.data))
             }
         }
-        if allFileClips, !files.isEmpty, transform == nil {
+        if allFileClips, !files.isEmpty, transform == nil, format == .original {
             // Every selected clip is a file clip (Finder copies also carry the names as text): paste the files.
             let pb = NSPasteboard.general
             pb.clearContents()
@@ -315,15 +357,53 @@ final class PasteService: PasteServicing {
         if let transform { joined = apply(transform, to: joined) }
         let fmt = ClipFormat(type: ClipUTI.plainText, data: Data(joined.utf8))
         writeToPasteboard([fmt])
-        if settings.saveMultiPaste {
-            let desc = String(joined.drop(while: { $0.isWhitespace }).prefix(settings.descTextSize))
-            var opts = ClipStore.AddOptions()
-            opts.allowDuplicates = settings.allowDuplicates
-            opts.allowBackToBackDuplicates = settings.allowBackToBackDuplicates
-            _ = try? store.addClip(formats: [fmt], description: desc, sourceApp: Bundle.main.bundleIdentifier ?? "DittoMac",
-                                   options: opts)
-        }
+        saveMultiPasteIfEnabled([fmt], text: joined)
         return true
+    }
+
+    /// Multi-clip Markdown / HTML source / rich text: each clip converted, joined with the multi-paste separator.
+    private func loadJoined(_ ids: [Int64], format: PasteFormat) -> Bool {
+        let all = ids.compactMap { try? store.formats(clipID: $0) }.filter { !$0.isEmpty }
+        let sep = MultiPaste.join(["", ""], separator: settings.multiPasteSeparator, reverse: false)
+        let ordered = settings.multiPasteReverse ? Array(all.reversed()) : all
+        if format == .richText {
+            let parts = ordered.compactMap { PasteContent.attributedForRichText(from: $0) }
+            guard !parts.isEmpty else {
+                state.message("Selected clips have no text to combine")
+                return false
+            }
+            let joined = NSMutableAttributedString()
+            for (i, p) in parts.enumerated() {
+                if i > 0 { joined.append(NSAttributedString(string: sep)) }
+                joined.append(p)
+            }
+            var out: [ClipFormat] = []
+            if let rtf = PasteContent.rtfData(joined) { out.append(ClipFormat(type: ClipUTI.rtf, data: rtf)) }
+            out.append(ClipFormat(type: ClipUTI.plainText, data: Data(joined.string.utf8)))
+            writeToPasteboard(out)
+            saveMultiPasteIfEnabled(out, text: joined.string)
+            return true
+        }
+        let parts = ordered.compactMap { PasteContent.string(for: format, from: $0) }
+        guard !parts.isEmpty else {
+            state.message("Selected clips have no text to combine")
+            return false
+        }
+        let joined = parts.joined(separator: sep)
+        let fmt = ClipFormat(type: ClipUTI.plainText, data: Data(joined.utf8))
+        writeToPasteboard([fmt])
+        saveMultiPasteIfEnabled([fmt], text: joined)
+        return true
+    }
+
+    private func saveMultiPasteIfEnabled(_ formats: [ClipFormat], text: String) {
+        guard settings.saveMultiPaste else { return }
+        let desc = String(text.drop(while: { $0.isWhitespace }).prefix(settings.descTextSize))
+        var opts = ClipStore.AddOptions()
+        opts.allowDuplicates = settings.allowDuplicates
+        opts.allowBackToBackDuplicates = settings.allowBackToBackDuplicates
+        _ = try? store.addClip(formats: formats, description: desc, sourceApp: Bundle.main.bundleIdentifier ?? "DittoMac",
+                               options: opts)
     }
 
     private func apply(_ t: TextTransform, to s: String) -> String {

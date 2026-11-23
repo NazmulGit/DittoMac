@@ -115,6 +115,9 @@ struct TypesPrefs: View {
     private static let presets: [(String, String)] = [
         ("Plain text", "public.utf8-plain-text"), ("Rich text (RTF)", "public.rtf"), ("HTML", "public.html"),
         ("PNG image", "public.png"), ("TIFF image", "public.tiff"), ("File URLs", "public.file-url"), ("PDF", "com.adobe.pdf"),
+        ("Web archive (Safari)", "com.apple.webarchive"), ("Rich text with images (RTFD)", "com.apple.flat-rtfd"),
+        ("RTFD package", "public.rtfd"), ("JPEG image", "public.jpeg"), ("GIF image", "com.compuserve.gif"),
+        ("HEIC image", "public.heic"), ("Link (URL)", "public.url"), ("Link title", "public.url-name"),
     ]
 
     private var runningApps: [(name: String, bundle: String)] {
@@ -140,6 +143,11 @@ struct TypesPrefs: View {
 
     var body: some View {
         Form {
+            Section("Formatting") {
+                Toggle("Keep full formatting (headings, styles, images, web archives)", isOn: m.b(\.keepFullFormatting))
+                Text("Also saves web archives (a web page’s HTML with its embedded images), rich text with inline images (RTFD), JPEG/GIF/HEIC images, PDF and links — exactly as copied, so pasting into Notes, Pages or Mail brings back the headings, styles and pictures. Each format is limited to 64 MB. Use Paste As › Plain Text (⇧Return) or Markdown (⌥⇧Return) when you don’t want the formatting.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section("Clipboard formats to save") {
                 Toggle("Support all types (save every format on the clipboard)", isOn: m.b(\.supportAllTypes))
                 if m.s.supportAllTypes {

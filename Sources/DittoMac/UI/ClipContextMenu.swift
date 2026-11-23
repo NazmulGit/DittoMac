@@ -65,6 +65,20 @@ final class ClipContextMenu {
         menu.addItem(item("Paste", "\r", [], enabled: hasClips) { [qp] in qp.pasteSelection(transform: nil) })
         menu.addItem(item("Paste Plain Text", "\r", [.shift], enabled: hasClips) { [qp] in qp.pasteSelection(transform: .plainText) })
 
+        // Paste As ▸ / Copy As ▸ — every PasteFormat; the default paste format is checked.
+        let defaultFormat = state.paste.defaultPasteFormat()
+        let pasteAs: [NSMenuItem] = PasteFormat.allCases.map { f in
+            let it = f == .markdown ? item(f.title, "\r", [.option, .shift], enabled: hasClips) { [qp] in qp.pasteSelection(format: f) }
+                                    : item(f.title, enabled: hasClips) { [qp] in qp.pasteSelection(format: f) }
+            it.state = f == defaultFormat ? .on : .off
+            return it
+        }
+        menu.addItem(QuickPasteMenuItem.submenu("Paste As", pasteAs, enabled: hasClips))
+        let copyAs: [NSMenuItem] = PasteFormat.allCases.map { f in
+            item(f.title, enabled: hasClips) { [qp] in qp.copySelection(format: f) }
+        }
+        menu.addItem(QuickPasteMenuItem.submenu("Copy As", copyAs, enabled: hasClips))
+
         var special: [NSMenuItem] = TextTransform.allCases.filter { $0 != .plainText }.map { t in
             item(t.title, enabled: hasClips) { [qp] in qp.pasteSelection(transform: t) }
         }
@@ -148,6 +162,9 @@ final class ClipContextMenu {
             item("Export to Text File(s)…", enabled: hasClips) { [qp] in qp.exportTextFiles() },
             item("Export to Image File(s)…", enabled: hasClips) { [qp] in qp.exportImageFiles() },
         ]
+        menu.addItem(item(nonGroups.count > 1 ? "Save Clips As…" : "Save Clip As…", "s", [.command, .shift], enabled: hasClips) { [qp] in
+            qp.saveSelectionAs()
+        })
         menu.addItem(QuickPasteMenuItem.submenu("Export", export, enabled: hasClips))
         menu.addItem(item("Import Clips…") { [qp] in qp.importClips() })
 

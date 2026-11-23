@@ -31,6 +31,31 @@ extension QuickPasteController {
         state.paste.paste(clipIDs: ids, transform: transform, sendPaste: send, moveToTop: moveToTop)
     }
 
+    /// Paste As ▸ — an explicit format, regardless of the default paste format.
+    func pasteSelection(format: PasteFormat, moveToTop: Bool = true) {
+        let sel = selectedClips
+        guard !sel.isEmpty else { return }
+        if sel.count == 1, sel[0].isGroup {
+            enterGroup(id: sel[0].id)
+            return
+        }
+        let ids = sel.filter { !$0.isGroup }.map(\.id)
+        guard !ids.isEmpty else { return }
+        if isFiltered { recordSearchHistory() }
+        let send = settings.sendPasteAfterSelection
+        if !settings.alwaysOnTop { hide(restoreFocus: !send) }
+        state.paste.paste(clipIDs: ids, format: format, sendPaste: send, moveToTop: moveToTop)
+    }
+
+    /// Copy As ▸ — put the selection on the clipboard in `format` without pasting.
+    func copySelection(format: PasteFormat) {
+        let ids = nonGroupSelection.map(\.id)
+        guard !ids.isEmpty else { return }
+        guard state.paste.copyToPasteboard(clipIDs: ids, format: format) else { return }
+        let what = ids.count == 1 ? "Copied" : "Copied \(ids.count) clips"
+        state.message(format == .original ? "\(what) to clipboard" : "\(what) as \(format.title)")
+    }
+
     /// ⌘1…⌘0 (and ⌥⌘ for plain text): paste the row whose first-ten label is `digit`.
     func pastePosition(digit: Int, plain: Bool) {
         let row = (digit - settings.firstTenHotKeysStart + 10) % 10

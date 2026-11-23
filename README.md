@@ -40,7 +40,9 @@ shasum -a 256 -c DittoMac-1.0.0-universal.dmg.sha256
 | Action | Keys |
 |---|---|
 | Open Quick Paste | **⌃`** (Control + backtick). Configurable, plus two alternates |
-| Paste selected / plain text | Return / ⇧Return (or double-click) |
+| Paste selected (default format) / plain text | Return / ⇧Return (or double-click) |
+| Paste as Markdown | ⌥⇧Return |
+| Save clip as RTF/RTFD, web archive, HTML, Markdown, text or PNG | ⌘⇧S |
 | Paste position 1–10 | ⌘1 … ⌘0 (⌥⌘ for plain text) |
 | Search | just type (wildcard `*`, `OR`, `NOT`, `"phrases"`; `/f` full text, `/q` quick-paste text) |
 | Preview / Edit / Properties | Space or F3 / ⌘E / ⌘I |
@@ -52,7 +54,8 @@ shasum -a 256 -c DittoMac-1.0.0-universal.dmg.sha256
 | Back to parent group / History | ⌘↑ / Home |
 | Hold ⌃ and press ` repeatedly | moves down the list, then releasing ⌃ pastes, as in Ditto |
 
-Right-click a clip for **Special Paste** (UPPER, lower, Capitalize, Sentence case, Invert, Trim, CamelCase,
+Right-click a clip for **Paste As** / **Copy As** (Original, Plain Text, Rich Text without images, Markdown,
+HTML Source), **Save Clip As…**, **Special Paste** (UPPER, lower, Capitalize, Sentence case, Invert, Trim, CamelCase,
 ASCII-only, remove line feeds, +line feed(s), +current time, Typoglycemia, Slugify, stitched images), stickies,
 ordering, groups, QR code, compare, web search, translate, share, export and *Send To* friends.
 
@@ -60,6 +63,10 @@ ordering, groups, QR code, compare, web search, translate, share, export and *Se
 
 - **Capture:** text, rich text, HTML, images and file references, with per-type control, include/exclude apps,
   size limits and duplicate handling. Password-manager clips are never stored.
+- **Full formatting:** copies from Safari, Notes, Pages or Mail keep their headings, styles and pictures (web
+  archives, RTFD, JPEG/GIF/HEIC, PDF, links), so pasting into Notes brings the whole layout back. Choose a default
+  paste format, always paste plain text into chosen apps, or paste/copy/save any clip as plain text, rich text,
+  Markdown or HTML. Previews never load anything from the web.
 - **Quick Paste popup:** caret, cursor or last position; 1–5 lines per row; thumbnails; colour-code swatches;
   first-ten numbers; pasted indicator; transparency; 12 Ditto themes plus System.
 - **Groups:** nested groups with a sidebar, move/copy to group, group hotkeys (double-press to file the next copy),
@@ -101,7 +108,7 @@ scripts/make_dmg.sh 1.0.0       # dist/DittoMac-1.0.0-universal.dmg
 | [docs/PLAN.md](docs/PLAN.md) | Decisions and roadmap |
 | [docs/RELEASE.md](docs/RELEASE.md) | How releases are built and published |
 | [docs/RESOURCES.md](docs/RESOURCES.md) | Upstream and Apple references |
-| [docs/kb/](docs/kb) | Knowledge base: data model, platform notes, themes, protocol, security reviews |
+| [docs/kb/](docs/kb) | Knowledge base: data model, platform notes, themes, protocol, rich formats, security reviews |
 | [CHANGELOG.md](CHANGELOG.md) | Release history |
 
 ## License

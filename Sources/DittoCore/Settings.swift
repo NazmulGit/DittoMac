@@ -115,6 +115,8 @@ public final class Settings: @unchecked Sendable {
     public var copyAppInclude: String { get { str("copyAppInclude", "*") } set { defaults.set(newValue, forKey: "copyAppInclude") } }
     public var copyAppExclude: String { get { str("copyAppExclude", "") } set { defaults.set(newValue, forKey: "copyAppExclude") } }
     public var playSoundOnCopy: String { get { str("playSoundOnCopy", "") } set { defaults.set(newValue, forKey: "playSoundOnCopy") } }
+    /// Also keep web archives, RTFD, JPEG/GIF/HEIC, PDF and links (independent of `enabledTypes`).
+    public var keepFullFormatting: Bool { get { bool("keepFullFormatting", true) } set { defaults.set(newValue, forKey: "keepFullFormatting") } }
     public var updateTimeOnPaste: Bool { get { bool("updateTimeOnPaste", true) } set { defaults.set(newValue, forKey: "updateTimeOnPaste") } }
 
     // MARK: popup
@@ -188,6 +190,17 @@ public final class Settings: @unchecked Sendable {
     public var sendPasteAfterSelection: Bool { get { bool("sendPasteAfterSelection", true) } set { defaults.set(newValue, forKey: "sendPasteAfterSelection") } }
     public var moveSelectionOnOpenHotkey: Bool { get { bool("moveSelectionOnOpenHotkey", true) } set { defaults.set(newValue, forKey: "moveSelectionOnOpenHotkey") } }
     public var hideOnHotKeyIfAlreadyShown: Bool { get { bool("hideOnHotKeyIfAlreadyShown", true) } set { defaults.set(newValue, forKey: "hideOnHotKeyIfAlreadyShown") } }
+    /// Format used by Return, double-click, ⌘1…⌘0 and the global paste hotkeys.
+    public var defaultPasteFormat: PasteFormat {
+        get { PasteFormat(rawValue: str("defaultPasteFormat", PasteFormat.original.rawValue)) ?? .original }
+        set { defaults.set(newValue.rawValue, forKey: "defaultPasteFormat") }
+    }
+    /// ";"-separated wildcard list (bundle id or app name); a default paste into a matching app is plain text.
+    public var plainTextApps: String { get { str("plainTextApps", "") } set { defaults.set(newValue, forKey: "plainTextApps") } }
+    /// The format a default paste into the given app uses.
+    public func defaultPasteFormat(bundleID: String, appName: String) -> PasteFormat {
+        PasteFormat.appMatches(plainTextApps, bundleID: bundleID, appName: appName) ? .plainText : defaultPasteFormat
+    }
     public var slugifySeparator: String { get { str("slugifySeparator", "-") } set { defaults.set(newValue, forKey: "slugifySeparator") } }
 
     // MARK: editor / tools
@@ -280,7 +293,7 @@ public final class Settings: @unchecked Sendable {
         "connectedToClipboard", "showMenuBarIcon", "showDockIcon", "launchAtLogin", "showStartupMessage", "maxEntries",
         "checkForMaxEntries", "expiredEntries", "checkForExpiredEntries", "allowDuplicates", "allowBackToBackDuplicates",
         "descTextSize", "maxClipSizeBytes", "saveClipDelayMS", "supportAllTypes", "enabledTypes", "copyAppInclude",
-        "copyAppExclude", "playSoundOnCopy", "updateTimeOnPaste", "linesPerRow", "popupPosition",
+        "copyAppExclude", "playSoundOnCopy", "updateTimeOnPaste", "keepFullFormatting", "defaultPasteFormat", "plainTextApps", "linesPerRow", "popupPosition",
         "popupWidth", "popupHeight", "popupX", "popupY", "alwaysOnTop", "transparencyPercent", "themeName", "fontName",
         "fontSize", "findAsYouType", "searchDescription", "searchFullText", "searchQuickPaste", "searchMode",
         "regexCaseInsensitive", "maintainSearchView", "searchHistory", "showAllClipsInMainList", "showGroupsInMainList",
