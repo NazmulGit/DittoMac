@@ -31,4 +31,5 @@ gh release create v1.0.0 dist/DittoMac-1.0.0-universal.dmg dist/DittoMac-1.0.0-u
 |---|---|---|
 | 1.0.0 | 2026-11-23 | First release, port of Ditto 3.25.113.0 |
 | 1.0.1 | 2026-11-23 | Start with Mac by default |
+| 1.1.1 | 2026-11-25 | Multi-clip drag-out as files + formats; login item self-heals |
 | 1.1.0 | 2026-11-23 | Full-format capture (web archive, RTFD, images), Paste/Copy As, Save Clip As, default paste format |

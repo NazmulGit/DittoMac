@@ -3,6 +3,14 @@
 All notable changes to DittoMac are recorded here. The format follows [Keep a Changelog](https://keepachangelog.com/)
 and the project uses [Semantic Versioning](https://semver.org/).
 
+## [1.1.1] - 2026-11-25
+### Fixed
+- **Drag and drop of several clips now works.** Select any number of clips and drag them to Finder, the desktop,
+  Mail, Notes, Messages or another app: each clip is dropped as a real file (image, .rtfd/.rtf/.html/.txt) and also
+  offers its text/rich-text/image formats to apps that paste them directly. Clips copied from Finder are still
+  dragged as the original files.
+- Start-at-login now re-points itself at the installed copy if the app was moved or reinstalled.
+
 ## [1.1.0] - 2026-11-23
 ### Added
 - Full-fidelity formatting. With "Keep full formatting" (Preferences › Types, on by default) DittoMac also saves web

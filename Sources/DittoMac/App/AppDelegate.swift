@@ -143,18 +143,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: Hotkeys
 
     /// Start with the Mac by default (like the Windows installer's "run on startup").
-    /// Only registers when the item was never registered, so turning it off in Preferences
-    /// (which clears Settings.launchAtLogin) or in System Settings › Login Items is respected.
+    /// Registers when the item was never registered, so turning it off in Preferences (which clears
+    /// Settings.launchAtLogin) or in System Settings › Login Items is respected. If the app now runs from a
+    /// different location than the one that was registered (moved, reinstalled, or a build folder), the login
+    /// item is re-registered so it launches this copy at the next login.
     private func ensureLaunchAtLogin() {
+        let defaults = state.settings.defaults
+        let pathKey = "loginItemRegisteredPath"
+        let here = Bundle.main.bundlePath
+        guard here.hasSuffix(".app"), state.settings.launchAtLogin else { return }
         let before = LoginItem.status
-        // A never-registered app can report .notFound; register() still works then.
-        guard state.settings.launchAtLogin, before == .notRegistered || before == .notFound else {
-            NSLog("DittoMac: launch at login: \(LoginItem.statusText) (wanted: \(state.settings.launchAtLogin))")
-            return
-        }
         do {
-            try LoginItem.setEnabled(true)
-            NSLog("DittoMac: launch at login registered: \(LoginItem.statusText)")
+            if before == .enabled {
+                // Unknown (nil) or different path: re-register so the item points at this copy.
+                let old = defaults.string(forKey: pathKey)
+                if old != here {
+                    try LoginItem.setEnabled(false)
+                    try LoginItem.setEnabled(true)
+                    NSLog("DittoMac: login item re-registered for \(here) (was \(old ?? "unknown"))")
+                }
+                defaults.set(here, forKey: pathKey)
+            } else if before == .notRegistered || before == .notFound {
+                // A never-registered app can report .notFound; register() still works then.
+                try LoginItem.setEnabled(true)
+                defaults.set(here, forKey: pathKey)
+                NSLog("DittoMac: launch at login registered: \(LoginItem.statusText)")
+            } else {
+                NSLog("DittoMac: launch at login: \(LoginItem.statusText)")
+            }
         } catch {
             NSLog("DittoMac: launch-at-login registration failed: \(error)")
         }

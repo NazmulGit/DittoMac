@@ -881,14 +881,16 @@ final class QuickPasteController: NSObject, NSWindowDelegate, NSTableViewDataSou
         if (notification.object as? NSTableView) === tableView { updateStatus() }
     }
 
+    /// One writer per dragged row (file promise + the clip's formats), so selecting several clips and dragging
+    /// them to Finder, the desktop, Mail or another app copies every one of them.
     func tableView(_ tableView: NSTableView, pasteboardWriterForRow row: Int) -> NSPasteboardWriting? {
-        guard let clip = clip(atRow: row), !clip.isGroup,
-              let formats = try? store.formats(clipID: clip.id), !formats.isEmpty else { return nil }
-        return PasteContent.pasteboardItems(for: formats).first
+        guard let clip = clip(atRow: row) else { return nil }
+        return ClipDragWriter.make(clip: clip, index: row + 1, store: store)
     }
 
-    /// A row can provide only one pasteboard writer, so a clip with several files adds its extra file items here.
+    /// A clip that holds several real files contributes its extra file items here (a row supplies one writer).
     func tableView(_ tableView: NSTableView, draggingSession session: NSDraggingSession, willBeginAt screenPoint: NSPoint, forRowIndexes rowIndexes: IndexSet) {
+        session.draggingFormation = .stack
         var extras: [NSPasteboardItem] = []
         for row in rowIndexes {
             guard let clip = clip(atRow: row), !clip.isGroup,
