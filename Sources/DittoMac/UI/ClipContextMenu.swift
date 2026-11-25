@@ -95,6 +95,33 @@ final class ClipContextMenu {
         menu.addItem(item("Edit Clip…", "e", enabled: one && hasClips) { [qp] in qp.editSelection() })
         menu.addItem(item("New Clip…", "n") { [qp] in qp.newClip() })
         menu.addItem(item("Properties…", "i", enabled: one) { [qp] in qp.propertiesSelection() })
+        menu.addItem(.separator())
+
+        // Locked notes and sticky notes.
+        let plan = qp.selectionLockPlan
+        let vault = state.vault
+        if plan.canLock || !plan.canRemoveLock {
+            let n = plan.unlockedIDs.count
+            let lockTitle = n > 1 ? "Lock \(n) Clips" : "Lock"
+            let lock = item(lockTitle, plan.canLock ? "l" : "", enabled: plan.canLock && vault != nil) { [qp] in qp.lockSelection() }
+            lock.image = NSImage(systemSymbolName: "lock", accessibilityDescription: nil)
+            lock.toolTip = vault?.isSetUp == true ? "Encrypt and protect from deletion" : "Encrypt and protect from deletion (first use sets up the lock)"
+            menu.addItem(lock)
+        }
+        if plan.canRemoveLock {
+            let remove = item("Remove Lock…", plan.canLock ? "" : "l", enabled: vault != nil) { [qp] in qp.removeLockSelection() }
+            remove.image = NSImage(systemSymbolName: "lock.open", accessibilityDescription: nil)
+            menu.addItem(remove)
+        }
+        if let v = vault, v.isSetUp {
+            if v.isUnlocked {
+                menu.addItem(item("Lock Notes Now", "l", [.command, .shift]) { [qp] in qp.lockVaultNow() })
+            } else {
+                menu.addItem(item("Unlock Notes…") { [qp] in qp.unlockVault() })
+            }
+        }
+        menu.addItem(item("New Sticky Note…", "n", [.command, .option]) { [qp] in qp.newStickyNote() })
+        menu.addItem(item("Show as Desktop Note", enabled: one && hasClips) { [qp] in qp.showSelectionAsDesktopNote() })
 
         let neverDelete = item("Never Auto Delete", enabled: has) { [qp] in qp.toggleNeverAutoDelete() }
         neverDelete.state = has && sel.allSatisfy(\.dontAutoDelete) ? .on : .off
@@ -157,22 +184,23 @@ final class ClipContextMenu {
             menu.addItem(item("Share", enabled: false) {})
         }
 
+        let exportable = !plan.exportableIDs.isEmpty
         let export: [NSMenuItem] = [
-            item("Export Clips…", enabled: hasClips) { [qp] in qp.exportClips() },
-            item("Export to Text File(s)…", enabled: hasClips) { [qp] in qp.exportTextFiles() },
-            item("Export to Image File(s)…", enabled: hasClips) { [qp] in qp.exportImageFiles() },
+            item("Export Clips…", enabled: exportable) { [qp] in qp.exportClips() },
+            item("Export to Text File(s)…", enabled: exportable) { [qp] in qp.exportTextFiles() },
+            item("Export to Image File(s)…", enabled: exportable) { [qp] in qp.exportImageFiles() },
         ]
         menu.addItem(item(nonGroups.count > 1 ? "Save Clips As…" : "Save Clip As…", "s", [.command, .shift], enabled: hasClips) { [qp] in
             qp.saveSelectionAs()
         })
-        menu.addItem(QuickPasteMenuItem.submenu("Export", export, enabled: hasClips))
+        menu.addItem(QuickPasteMenuItem.submenu("Export", export, enabled: exportable))
         menu.addItem(item("Import Clips…") { [qp] in qp.importClips() })
 
         var sendTo: [NSMenuItem] = []
         let peers = settings.friendsPeers
         let friendsOn = settings.friendsEnabled && state.friends != nil
         for peer in peers {
-            sendTo.append(item(peer.name.isEmpty ? peer.host : peer.name, enabled: friendsOn && hasClips) { [qp] in qp.sendSelection(to: peer) })
+            sendTo.append(item(peer.name.isEmpty ? peer.host : peer.name, enabled: friendsOn && exportable) { [qp] in qp.sendSelection(to: peer) })
         }
         if peers.isEmpty {
             sendTo.append(item("No friends configured", enabled: false) {})
@@ -218,6 +246,13 @@ final class ClipContextMenu {
             return it
         }
         menu.addItem(QuickPasteMenuItem.submenu("Position", pos))
+        menu.addItem(.separator())
+
+        menu.addItem(item("New Sticky Note…", "n", [.command, .option]) { [qp] in qp.newStickyNote() })
+        if let v = state.vault, v.isSetUp {
+            menu.addItem(v.isUnlocked ? item("Lock Notes Now", "l", [.command, .shift]) { [qp] in qp.lockVaultNow() }
+                                      : item("Unlock Notes…") { [qp] in qp.unlockVault() })
+        }
         menu.addItem(.separator())
 
         let connected = item("Connected to Clipboard") { [qp] in qp.state.monitor.isConnected.toggle() }

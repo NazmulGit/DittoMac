@@ -283,8 +283,13 @@ public final class Settings: @unchecked Sendable {
 
     /// Removes every stored setting except stats counters, restoring all defaults.
     public func resetToDefaults() {
-        let keep: Set<String> = ["copyCountTotal", "pasteCountTotal", "copyCountTrip", "pasteCountTrip", "tripStartDate", "totalStartDate"]
-        for k in defaults.dictionaryRepresentation().keys where Self.allKeys.contains(k) && !keep.contains(k) {
+        // Never reset: stats counters, this Mac's sync identity, and the vault setup (method/configured flag), which
+        // would orphan locked notes.
+        let keep: Set<String> = ["copyCountTotal", "pasteCountTotal", "copyCountTrip", "pasteCountTrip", "tripStartDate",
+                                 "totalStartDate", "syncDeviceID", "vaultMethod", "vaultConfigured"]
+        let resettable = Self.allKeys.union(Self.appearanceKeys).union(Self.beautifyKeys).union(Self.uploadKeys)
+            .union(Self.screenshotKeys).union(Self.syncKeys).union(Self.vaultResettableKeys)
+        for k in defaults.dictionaryRepresentation().keys where resettable.contains(k) && !keep.contains(k) {
             defaults.removeObject(forKey: k)
         }
     }

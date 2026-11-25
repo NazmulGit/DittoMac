@@ -18,7 +18,12 @@ DittoMac stores everything you copy, so it is treated as sensitive software.
 | Regex | Input capped at 100k characters; invalid patterns are ignored |
 | URLs | Web search / translate templates must be `https://`; clip text is percent-encoded via `URLComponents` |
 | QR codes | Generated locally with CoreImage (upstream optionally used a web service) |
-| Binary | Hardened runtime; universal (arm64 + x86_64) |
+| Locked notes (vault) | AES-256-GCM per format under a random 256-bit data key, row-bound AAD; can't be deleted by Delete, Delete All, cleanup, history limits, copy buffers or sync; hidden (and removed from open windows, caches and drag staging files) whenever the vault locks; auto-lock after inactivity, on sleep / screen lock and on quit; changing the method or password always asks again; never exported, sent to Friends or synced. **Password method is cryptographic** (PBKDF2-SHA256 600k wraps the key; without the password the notes can't be decrypted). **Mac password / Touch ID method is an app-level gate**: the key is held in your login Keychain, so malware running as you, or anyone who can unlock your Keychain, can read it |
+| Screenshots | Screen Recording permission is only requested on your click; the capture overlay closes on Esc / ⌘W / right-click and when an alert appears; file names are sanitised and never overwrite; save folder `0700`; screenshots are added to your clip history (setting) |
+| Upload & share | **Off by default.** Uploads are **public links to a third party you choose** (custom https endpoint, Imgur with your own Client-ID, or 0x0.st): anyone with the link can see the image. A notice names the host before uploading; https only; no redirects that resend the image to another host; 64 KB response cap; no cookies; keys in the Keychain; history `0600`. DittoMac never contacts prnt.sc / Lightshot |
+| Cloud sync & backup | **Off by default.** End-to-end encrypted `.dmsync` files (PBKDF2-SHA256 600k + AES-256-GCM) in a folder your cloud app syncs; no OAuth, no provider API; passphrase only in the Keychain; hostile files validated (size, count, decompression and iteration caps; symlinks refused; no file paths imported); locked notes and copy buffers excluded. Sync only adds clips: **deletions aren't synced** |
+| Themes | Imported theme JSON ≤ 64 KB, known colour keys and hex values only, sanitised names and file names, files `0600` |
+| Binary | Hardened runtime; universal (arm64 + x86_64); empty entitlements |
 
 ## Upstream issues not carried over
 `docs/kb/security-review-upstream.md` lists the weaknesses found in Ditto 3.25.113.0 (Windows) during the port.
@@ -29,3 +34,11 @@ None of that C++ code is used here.
   The DMG's SHA-256 checksum is published with each release.
 - The clip database is not encrypted at rest beyond file permissions and FileVault.
 - Auto-paste needs the Accessibility permission. This is inherent to posting ⌘V into another app.
+- Because builds are ad-hoc signed, macOS may treat each update as a new app: **Screen Recording, Accessibility and
+  Keychain access must be granted again after an update** (switch DittoMac off and on in Privacy & Security).
+- While the vault is unlocked, locked notes are decrypted in memory, and anything you paste lands on the general
+  pasteboard (marked Concealed). Plaintext copies made before a clip was locked, such as older backups or exports,
+  are not affected by locking.
+- Uploaded images can't be made private again. Only Imgur uploads can be deleted from DittoMac.
+
+Review notes: `docs/kb/security-review-port.md` (1.0) and `docs/kb/security-review-v12.md` (1.2).

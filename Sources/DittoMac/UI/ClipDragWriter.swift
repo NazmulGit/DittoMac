@@ -8,7 +8,9 @@
 // Clips that hold real file references (copied in Finder) are dragged as those files instead.
 //
 // Temp files live in a 0700 folder under the user's temporary directory, one sub-folder per drag, and
-// folders older than an hour are removed the next time a drag starts.
+// folders older than an hour are removed the next time a drag starts. Locked notes are staged only while the vault
+// is unlocked, under a neutral name and mode 0600, and their folders are deleted as soon as the vault locks. The
+// whole staging area (and leftover share-panel PNGs) is removed at launch (after a crash) and at quit.
 
 import AppKit
 import DittoCore
@@ -19,10 +21,18 @@ enum ClipDragWriter {
     private static let maxFileBytes = 64 * 1024 * 1024
 
     private static var currentFolder: (url: URL, created: Date)?
+    /// Drag folders holding a locked note's plaintext; deleted by `purgeLockedStaging()` when the vault locks.
+    private static var lockedFolders: Set<URL> = []
 
-    /// Returns nil for groups or clips without data.
+    private static var stagingRoot: URL {
+        URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true).appendingPathComponent("DittoMacDrag", isDirectory: true)
+    }
+
+    /// Returns nil for groups or clips without data. Locked notes return nil while the vault is locked.
     static func make(clip: Clip, index: Int, store: ClipStore) -> NSPasteboardWriting? {
-        guard !clip.isGroup, let formats = try? store.formats(clipID: clip.id), !formats.isEmpty else { return nil }
+        guard !clip.isGroup else { return nil }
+        if clip.isLocked && store.vaultKey == nil { return nil }
+        guard let formats = try? store.formats(clipID: clip.id), !formats.isEmpty else { return nil }
 
         // Real files (copied in Finder): drag the files themselves.
         if formats.contains(where: { $0.type == ClipUTI.fileURL }) {
@@ -66,16 +76,24 @@ enum ClipDragWriter {
         if let p = payload, p.count > maxFileBytes { return nil }
 
         guard let folder = dragFolder() else { return nil }
-        let base = ImportExport.textFileName(for: clip, index: index)
-        let stem = base.hasSuffix(".txt") ? String(base.dropLast(4)) : base
+        // A locked note's file name never carries its (decrypted) description.
+        let stem: String
+        if clip.isLocked {
+            stem = "Locked note \(index)"
+            lockedFolders.insert(folder)
+        } else {
+            let base = ImportExport.textFileName(for: clip, index: index)
+            stem = base.hasSuffix(".txt") ? String(base.dropLast(4)) : base
+        }
         let url = folder.appendingPathComponent("\(stem).\(ext)")
         do {
             if let p = payload { try p.write(to: url, options: .atomic) }
             else if let w = package { try w.write(to: url, options: .atomic, originalContentsURL: nil) }
-            try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: url.path)
+            try? FileManager.default.setAttributes([.posixPermissions: clip.isLocked ? 0o600 : 0o644], ofItemAtPath: url.path)
             return url
         } catch {
-            NSLog("DittoMac: could not stage dragged clip: \(error)")
+            // No path in the log: file names are derived from clip text.
+            NSLog("DittoMac: could not stage a dragged clip (error %ld)", (error as NSError).code)
             return nil
         }
     }
@@ -83,7 +101,7 @@ enum ClipDragWriter {
     /// One folder per drag: reused while the rows of the same drag are requested (they arrive within milliseconds).
     private static func dragFolder() -> URL? {
         if let c = currentFolder, Date().timeIntervalSince(c.created) < 5 { return c.url }
-        let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true).appendingPathComponent("DittoMacDrag", isDirectory: true)
+        let root = stagingRoot
         let fm = FileManager.default
         do {
             try fm.createDirectory(at: root, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
@@ -93,8 +111,29 @@ enum ClipDragWriter {
             currentFolder = (f, Date())
             return f
         } catch {
-            NSLog("DittoMac: drag staging folder unavailable: \(error)")
+            NSLog("DittoMac: drag staging folder unavailable (error %ld)", (error as NSError).code)
             return nil
+        }
+    }
+
+    /// Deletes every staged copy of a locked note (call whenever the vault locks or is reset).
+    static func purgeLockedStaging() {
+        let fm = FileManager.default
+        for f in lockedFolders { try? fm.removeItem(at: f) }
+        if let c = currentFolder, lockedFolders.contains(c.url) { currentFolder = nil }
+        lockedFolders.removeAll()
+    }
+
+    /// Removes the whole drag staging area and leftover share-panel PNGs (launch, after a crash, and quit).
+    static func purgeAllStaging() {
+        let fm = FileManager.default
+        try? fm.removeItem(at: stagingRoot)
+        currentFolder = nil
+        lockedFolders.removeAll()
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        for u in (try? fm.contentsOfDirectory(at: tmp, includingPropertiesForKeys: nil)) ?? []
+        where u.lastPathComponent.hasPrefix("DittoMac-Share-") {
+            try? fm.removeItem(at: u)
         }
     }
 

@@ -166,6 +166,10 @@ extension QuickPasteController {
     func saveSelectionAs() {
         let clips = selectedClips.filter { !$0.isGroup }
         guard !clips.isEmpty else { return }
+        withVaultAccess(clips, reason: "save a locked note") { [weak self] in self?.saveClipsAs(clips) }
+    }
+
+    private func saveClipsAs(_ clips: [Clip]) {
         let loaded: [(Clip, [ClipFormat])] = clips.compactMap { c in
             guard let f = try? store.formats(clipID: c.id), !f.isEmpty else { return nil }
             return (c, f)

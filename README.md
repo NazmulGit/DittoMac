@@ -36,10 +36,12 @@ It is free and open source.
    ```
 4. Grant **Accessibility** when asked (*System Settings → Privacy & Security → Accessibility*). DittoMac needs it to
    type ⌘V into the app you were using. Without it, clips are still placed on the clipboard for you to paste.
+5. For screenshots, grant **Screen Recording** the first time you capture (*System Settings → Privacy & Security →
+   Screen & System Audio Recording*). DittoMac is ad-hoc signed, so macOS asks again after each update.
 
 Verify the download (optional):
 ```bash
-shasum -a 256 -c DittoMac-1.0.0-universal.dmg.sha256
+shasum -a 256 -c DittoMac-1.2.0-universal.dmg.sha256
 ```
 
 ## Use
@@ -58,6 +60,9 @@ shasum -a 256 -c DittoMac-1.0.0-universal.dmg.sha256
 | Always on top | ⌃Space |
 | Copy without pasting | ⌘C |
 | Delete | ⌘⌫ or ⌦ |
+| Lock / unlock selected notes · lock vault now | ⌘L · ⇧⌘L |
+| New sticky note | ⌥⌘N |
+| **Screenshot:** area · window · full screen | **⌃⇧4** · **⌃⇧5** · **⌃⇧3** (configurable) |
 | Back to parent group / History | ⌘↑ / Home |
 | Hold ⌃ and press ` repeatedly | moves down the list, then releasing ⌃ pastes, as in Ditto |
 
@@ -85,7 +90,24 @@ ordering, groups, QR code, compare, web search, translate, share, export and *Se
 - **Retention:** max entries, expiry by last use, delete unused, delete clip data by filter, compact, backup/restore.
 - **Import your Windows Ditto history** (`Ditto.db`), export/import `.dittoclips`, export to text or image files.
 - **Friends:** share clips between your Macs on the local network, end-to-end encrypted. Off by default.
+- **Screenshots (a Lightshot replacement):** press **⌃⇧4**, drag to select, move and resize the selection, then
+  annotate with pen, line, arrow, rectangle, ellipse, marker, text, numbered steps, pixelate, blur and a colour
+  picker (undo/redo included). Copy, save (PNG/JPG/BMP), print, pin to screen, **upload and share by link**, share to
+  X, Facebook, Pinterest, VK, Reddit, LinkedIn, WhatsApp, Telegram or email, or search for similar images. Window and
+  full-screen capture, capture delay, and every screenshot lands in your clipboard history.
+- **Beautify:** wrap a screenshot in a professional frame: 18 presets, gradient or solid backgrounds, padding,
+  rounded corners, shadow, outline, a macOS window or browser frame, and 16:9/4:3/1:1 canvases. Apply it per capture
+  or to every screenshot.
+- **Locked sticky notes:** lock any clip or note so it can't be deleted by mistake and is encrypted at rest. Unlock
+  with **Touch ID / your Mac login password** or a **separate DittoMac password**. Auto-locks on a timer, on sleep and
+  on screen lock. New Sticky Note (⌥⌘N) and optional floating desktop notes.
+- **Cloud sync and backup:** pick your Google Drive, iCloud Drive, Dropbox or OneDrive folder and DittoMac keeps an
+  end-to-end encrypted copy of your history there, merging it across your Macs. No account or token is needed.
+- **Appearance:** light/dark/system, accent colour, custom themes (import/export/editor), row density, timestamps,
+  source-app icons, translucent popup, menu-bar icon choices and more.
 - **Launch at login, menu-bar icon, optional Dock icon**
+
+<p align="center"><img src="docs/assets/beautify-presets.png" width="640" alt="Beautify presets"></p>
 
 The full parity matrix against Windows Ditto is in [docs/FEATURES.md](docs/FEATURES.md).
 
@@ -94,7 +116,12 @@ The full parity matrix against Windows Ditto is in [docs/FEATURES.md](docs/FEATU
 - Your clipboard history is stored only in a local database on your Mac (permissions `0600`).
 - No telemetry, no tracking and no account.
 - Clips copied from password managers are skipped and never stored.
-- LAN sharing (*Friends*) is off by default. When you turn it on, it is authenticated and encrypted.
+- LAN sharing (*Friends*) and cloud sync are off by default. When you turn them on they are authenticated and
+  encrypted; locked notes are never shared or synced.
+- **Uploads are opt-in.** Nothing is uploaded until you choose a provider (your own HTTPS endpoint, Imgur with your
+  own Client-ID, or 0x0.st) and accept a notice. Uploaded screenshots are public to anyone with the link. DittoMac does
+  not use Lightshot's prnt.sc service, which has no public API.
+- Screenshots need the macOS Screen Recording permission and are only taken when you press a capture hotkey.
 
 ## Security
 
@@ -109,8 +136,8 @@ You only need the Xcode **Command Line Tools** (`xcode-select --install`). The f
 ```bash
 git clone https://github.com/NazmulGit/DittoMac-Clipboard-Manager.git && cd DittoMac-Clipboard-Manager
 scripts/test.sh                 # unit tests (swift-testing)
-scripts/build_app.sh 1.0.0      # universal, signed dist/DittoMac.app
-scripts/make_dmg.sh 1.0.0       # dist/DittoMac-1.0.0-universal.dmg
+scripts/build_app.sh 1.2.0      # universal, signed dist/DittoMac.app
+scripts/make_dmg.sh 1.2.0       # dist/DittoMac-1.2.0-universal.dmg
 ```
 
 ## Documentation

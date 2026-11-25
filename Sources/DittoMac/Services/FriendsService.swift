@@ -464,7 +464,7 @@ final class FriendsService: FriendsServicing {
         }
     }
 
-    var hasPassphrase: Bool { loadPassphrase() != nil }
+    var hasPassphrase: Bool { passphraseLoaded ? passphrase != nil : Keychain.has(account: Self.passphraseAccount) }
 
     private func loadPassphrase() -> String? {
         if !passphraseLoaded {
@@ -549,7 +549,7 @@ final class FriendsService: FriendsServicing {
 
     func sendToAutoPeers(clipID: Int64) {
         guard state.settings.friendsEnabled, hasPassphrase else { return }
-        if let c = try? state.store.clip(id: clipID), c.sourceApp.hasPrefix("friend:") { return }   // never echo received clips
+        if let c = try? state.store.clip(id: clipID), c.sourceApp.hasPrefix("friend:") || c.isLocked { return }   // never echo received clips
         for peer in state.settings.friendsPeers where peer.sendAllCopies {
             send(clipIDs: [clipID], to: peer, silent: true)
         }
@@ -567,7 +567,8 @@ final class FriendsService: FriendsServicing {
         var clips = [FriendsClip]()
         var skipped = 0
         for id in clipIDs {
-            guard let c = try? state.store.clip(id: id), !c.isGroup, let all = try? state.store.formats(clipID: id) else { skipped += 1; continue }
+            // Locked notes never leave this Mac (while unlocked the store would return plaintext).
+            guard let c = try? state.store.clip(id: id), !c.isGroup, !c.isLocked, let all = try? state.store.formats(clipID: id) else { skipped += 1; continue }
             var formats = [FriendsFormat]()
             var total = 0
             var seen = Set<String>()

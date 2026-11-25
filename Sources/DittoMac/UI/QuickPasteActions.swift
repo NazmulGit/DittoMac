@@ -19,9 +19,11 @@ extension QuickPasteController {
             enterGroup(id: sel[0].id)
             return
         }
-        let ids = sel.filter { !$0.isGroup }.map(\.id)
-        guard !ids.isEmpty else { return }
-        paste(ids: ids, transform: transform, moveToTop: moveToTop)
+        let clips = sel.filter { !$0.isGroup }
+        guard !clips.isEmpty else { return }
+        withVaultAccess(clips, reason: "paste a locked note") { [weak self] in
+            self?.paste(ids: clips.map(\.id), transform: transform, moveToTop: moveToTop)
+        }
     }
 
     func paste(ids: [Int64], transform: TextTransform?, moveToTop: Bool = true) {
@@ -39,21 +41,28 @@ extension QuickPasteController {
             enterGroup(id: sel[0].id)
             return
         }
-        let ids = sel.filter { !$0.isGroup }.map(\.id)
-        guard !ids.isEmpty else { return }
-        if isFiltered { recordSearchHistory() }
-        let send = settings.sendPasteAfterSelection
-        if !settings.alwaysOnTop { hide(restoreFocus: !send) }
-        state.paste.paste(clipIDs: ids, format: format, sendPaste: send, moveToTop: moveToTop)
+        let clips = sel.filter { !$0.isGroup }
+        guard !clips.isEmpty else { return }
+        withVaultAccess(clips, reason: "paste a locked note") { [weak self] in
+            guard let self else { return }
+            if self.isFiltered { self.recordSearchHistory() }
+            let send = self.settings.sendPasteAfterSelection
+            if !self.settings.alwaysOnTop { self.hide(restoreFocus: !send) }
+            self.state.paste.paste(clipIDs: clips.map(\.id), format: format, sendPaste: send, moveToTop: moveToTop)
+        }
     }
 
     /// Copy As ▸ — put the selection on the clipboard in `format` without pasting.
     func copySelection(format: PasteFormat) {
-        let ids = nonGroupSelection.map(\.id)
-        guard !ids.isEmpty else { return }
-        guard state.paste.copyToPasteboard(clipIDs: ids, format: format) else { return }
-        let what = ids.count == 1 ? "Copied" : "Copied \(ids.count) clips"
-        state.message(format == .original ? "\(what) to clipboard" : "\(what) as \(format.title)")
+        let clips = nonGroupSelection
+        guard !clips.isEmpty else { return }
+        withVaultAccess(clips, reason: "copy a locked note") { [weak self] in
+            guard let self else { return }
+            let ids = clips.map(\.id)
+            guard self.state.paste.copyToPasteboard(clipIDs: ids, format: format) else { return }
+            let what = ids.count == 1 ? "Copied" : "Copied \(ids.count) clips"
+            self.state.message(format == .original ? "\(what) to clipboard" : "\(what) as \(format.title)")
+        }
     }
 
     /// ⌘1…⌘0 (and ⌥⌘ for plain text): paste the row whose first-ten label is `digit`.
@@ -65,37 +74,49 @@ extension QuickPasteController {
     }
 
     func pasteStitched(vertical: Bool) {
-        let ids = nonGroupSelection.map(\.id)
-        guard !ids.isEmpty else { return }
-        if !settings.alwaysOnTop { hide(restoreFocus: !settings.sendPasteAfterSelection) }
-        state.paste.pasteImagesStitched(clipIDs: ids, vertical: vertical)
+        let clips = nonGroupSelection
+        guard !clips.isEmpty else { return }
+        withVaultAccess(clips, reason: "paste a locked note") { [weak self] in
+            guard let self else { return }
+            if !self.settings.alwaysOnTop { self.hide(restoreFocus: !self.settings.sendPasteAfterSelection) }
+            self.state.paste.pasteImagesStitched(clipIDs: clips.map(\.id), vertical: vertical)
+        }
     }
 
     func copySelection() {
-        let ids = nonGroupSelection.map(\.id)
-        guard !ids.isEmpty else { return }
-        state.paste.copyToPasteboard(clipIDs: ids, transform: nil)
-        state.message(ids.count == 1 ? "Copied to clipboard" : "Copied \(ids.count) clips to clipboard")
+        let clips = nonGroupSelection
+        guard !clips.isEmpty else { return }
+        withVaultAccess(clips, reason: "copy a locked note") { [weak self] in
+            guard let self else { return }
+            let ids = clips.map(\.id)
+            self.state.paste.copyToPasteboard(clipIDs: ids, transform: nil)
+            self.state.message(ids.count == 1 ? "Copied to clipboard" : "Copied \(ids.count) clips to clipboard")
+        }
     }
 
     // MARK: Windows
 
     func previewSelection() {
         guard let c = nonGroupSelection.first else { return }
-        PreviewWindowController.setNavigationContext(clips.filter { !$0.isGroup }.map(\.id))
-        state.windows.showPreview(clipID: c.id)
+        // Arrow-key navigation in the preview never steps onto a locked note while the vault is locked.
+        let unlocked = isVaultUnlocked
+        let nav = clips.filter { !$0.isGroup && (unlocked || !$0.isLocked) }.map(\.id)
+        withVaultAccess([c], reason: "preview a locked note") { [weak self] in
+            PreviewWindowController.setNavigationContext(nav.contains(c.id) ? nav : [c.id])
+            self?.state.windows.showPreview(clipID: c.id)
+        }
     }
 
     func editSelection() {
         guard let c = nonGroupSelection.first else { return }
-        state.windows.showEditor(clipID: c.id)
+        withVaultAccess([c], reason: "edit a locked note") { [weak self] in self?.state.windows.showEditor(clipID: c.id) }
     }
 
     func newClip() { state.windows.showEditor(clipID: nil) }
 
     func propertiesSelection() {
         guard let c = selectedClips.first else { return }
-        state.windows.showProperties(clipID: c.id)
+        withVaultAccess([c], reason: "show a locked note’s properties") { [weak self] in self?.state.windows.showProperties(clipID: c.id) }
     }
 
     func showPreferences() { state.windows.showPreferences(tab: nil) }
@@ -238,7 +259,7 @@ extension QuickPasteController {
     // MARK: Filter / compare / tools
 
     func filterOnSelectedClip() {
-        guard let c = nonGroupSelection.first else { return }
+        guard let c = nonGroupSelection.first, !c.isLocked else { return }
         let firstLine = c.text.split(whereSeparator: \.isNewline).first.map(String.init) ?? c.text
         let text = String(firstLine.trimmingCharacters(in: .whitespaces).prefix(60))
         guard !text.isEmpty else { return }
@@ -256,19 +277,32 @@ extension QuickPasteController {
             state.message("Select exactly two clips to compare")
             return
         }
-        state.windows.showCompare(leftID: sel[1].id, rightID: sel[0].id)
+        withVaultAccess(sel, reason: "compare a locked note") { [weak self] in
+            self?.state.windows.showCompare(leftID: sel[1].id, rightID: sel[0].id)
+        }
     }
 
     func qrCodeSelection() {
-        guard let c = nonGroupSelection.first, let text = PasteContent.text(clipID: c.id, store: store), !text.isEmpty else {
-            state.message("Clip has no text for a QR code")
-            return
+        guard let c = nonGroupSelection.first else { return }
+        withVaultAccess([c], reason: "make a QR code of a locked note") { [weak self] in
+            guard let self else { return }
+            guard let text = PasteContent.text(clipID: c.id, store: self.store), !text.isEmpty else {
+                self.state.message("Clip has no text for a QR code")
+                return
+            }
+            self.state.windows.showQRCode(text: text)
+            if c.isLocked { (self.state.windows as? WindowRouter)?.qrShowsLockedNote = true }
         }
-        state.windows.showQRCode(text: text)
     }
 
     func webSearchSelection(translate: Bool) {
         guard let c = nonGroupSelection.first else { return }
+        withVaultAccess([c], reason: "search the web for a locked note") { [weak self] in
+            self?.performWebSearch(c, translate: translate)
+        }
+    }
+
+    private func performWebSearch(_ c: Clip, translate: Bool) {
         let text = (PasteContent.text(clipID: c.id, store: store) ?? c.text).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else {
             state.message("Clip has no text to search for")
@@ -298,7 +332,9 @@ extension QuickPasteController {
 
     func shareItemsForSelection() -> [Any] {
         var items: [Any] = []
-        for c in nonGroupSelection.prefix(20) {
+        let unlocked = isVaultUnlocked
+        for c in nonGroupSelection.prefix(20) where unlocked || !c.isLocked {
+            if c.isLocked { vaultService?.noteActivity() }
             switch kind(of: c) {
             case .image:
                 if let img = PasteContent.image(clipID: c.id, store: store) { items.append(img) }
@@ -312,8 +348,12 @@ extension QuickPasteController {
     }
 
     func sendSelection(to peer: FriendPeer) {
-        let ids = nonGroupSelection.map(\.id)
-        guard !ids.isEmpty else { return }
+        // Locked notes never leave this Mac (FriendsService also refuses them).
+        let ids = lockPlan(nonGroupSelection).exportableIDs
+        guard !ids.isEmpty else {
+            if !nonGroupSelection.isEmpty { state.message("Locked notes can’t be sent") }
+            return
+        }
         guard let friends = state.friends, settings.friendsEnabled else {
             state.message("Friends sync is turned off (Preferences › Friends)")
             return
@@ -327,6 +367,10 @@ extension QuickPasteController {
     func deleteSelection() {
         let sel = selectedClips
         guard !sel.isEmpty else { return }
+        if lockPlan(sel).hasLocked {
+            deleteSelectionWithLocks(sel)
+            return
+        }
         if settings.promptWhenDeletingClips {
             let a = NSAlert()
             a.alertStyle = .warning
@@ -350,6 +394,12 @@ extension QuickPasteController {
             if a.suppressionButton?.state == .on, response == .alertFirstButtonReturn { settings.promptWhenDeletingClips = false }
             guard response == .alertFirstButtonReturn else { return }
         }
+        performPlainDelete(sel)
+    }
+
+    /// Deletes clips / groups that are not locked (no prompt) and restores a sensible selection.
+    func performPlainDelete(_ sel: [Clip]) {
+        guard !sel.isEmpty else { return }
         let firstRow = tableView.selectedRowIndexes.first ?? 0
         let hadShortcuts = sel.contains { $0.shortcut != 0 || $0.moveToGroupShortcut != 0 }
         do {
@@ -516,8 +566,18 @@ extension QuickPasteController {
 
     // MARK: Export
 
+    /// Non-group selection without locked notes (export never includes them); tells the user when some were skipped.
+    private func exportableSelection() -> [Clip] {
+        let all = nonGroupSelection
+        let out = all.filter { !$0.isLocked }
+        if out.count < all.count {
+            state.message(out.isEmpty ? "Locked notes aren’t exported" : "\(all.count - out.count) locked note(s) skipped")
+        }
+        return out
+    }
+
     func exportClips() {
-        let ids = nonGroupSelection.map(\.id)
+        let ids = exportableSelection().map(\.id)
         guard !ids.isEmpty else { return }
         let p = NSSavePanel()
         p.title = "Export Clips"
@@ -534,7 +594,7 @@ extension QuickPasteController {
     }
 
     func exportTextFiles() {
-        let items: [(Clip, String)] = nonGroupSelection.compactMap { c in
+        let items: [(Clip, String)] = exportableSelection().compactMap { c in
             PasteContent.text(clipID: c.id, store: store).map { (c, $0) }
         }
         guard !items.isEmpty else {
@@ -548,7 +608,7 @@ extension QuickPasteController {
 
     func exportImageFiles() {
         var files: [(String, Data)] = []
-        for (i, c) in nonGroupSelection.enumerated() {
+        for (i, c) in exportableSelection().enumerated() {
             guard let formats = try? store.formats(clipID: c.id), let data = PasteContent.imageData(from: formats) else { continue }
             let png: Data
             if formats.contains(where: { $0.type == ClipUTI.png }) { png = data } else {

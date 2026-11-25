@@ -43,6 +43,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate {
     private var available: [ViewMode] = []
     private var mode: ViewMode = .text
     private var observer: NSObjectProtocol?
+    private var vaultObserver: NSObjectProtocol?
 
     init(state: AppState) {
         self.state = state
@@ -62,9 +63,31 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate {
         observer = NotificationCenter.default.addObserver(forName: .dittoClipsChanged, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.refreshIfVisible() }
         }
+        vaultObserver = NotificationCenter.default.addObserver(forName: .dittoVaultChanged, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.closeIfLockedNote() }
+        }
     }
     required init?(coder: NSCoder) { fatalError() }
-    deinit { if let o = observer { NotificationCenter.default.removeObserver(o) } }
+    deinit {
+        if let o = observer { NotificationCenter.default.removeObserver(o) }
+        if let o = vaultObserver { NotificationCenter.default.removeObserver(o) }
+    }
+
+    /// When the vault locks, a preview of a locked note must not keep showing its text: blank it and close.
+    private func closeIfLockedNote() {
+        guard clipID != 0, state.vault?.isUnlocked != true,
+              ((try? state.store.clip(id: clipID)) ?? nil)?.isLocked == true else { return }
+        blankContent()
+        window?.close()
+    }
+
+    private func blankContent() {
+        formats = []
+        textView.string = ""
+        imageView.image = nil
+        headerLabel.stringValue = ""
+        window?.title = "Clip Description"
+    }
 
     // MARK: UI
     private func buildUI() {
@@ -337,7 +360,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate {
 
     func windowDidResize(_ notification: Notification) { if mode != .image, wrapCheck.state == .on { applyWrap() } }
     func windowWillClose(_ notification: Notification) {
-        formats = []
+        blankContent()
         onClose?()
     }
 }

@@ -25,12 +25,13 @@ public enum ImportExport {
     /// Writes the given clips (selected groups include their descendants; ancestor groups of exported
     /// clips are exported too so grouping survives) to a fresh `.dittoclips` SQLite file at `url`,
     /// replacing any existing file. Returns the number of non-group clips written.
+    /// Locked clips (vault) are never exported, even when selected or inside a selected group.
     @discardableResult
     public static func exportClips(ids: [Int64], from store: ClipStore, to url: URL) throws -> Int {
         var items: [Int64: Clip] = [:]
         var queue = ids
         while let id = queue.popLast() {
-            guard items[id] == nil, let c = try store.clip(id: id) else { continue }
+            guard items[id] == nil, let c = try store.clip(id: id), !c.isLocked else { continue }
             items[id] = c
             if c.isGroup { queue += try store.children(ofGroup: id).map(\.id) }
         }
@@ -129,12 +130,14 @@ public enum ImportExport {
         var quickPasteText: String
         var clipOrder: Double
         var lastPasteDate: Int64
+        var isLocked = false
     }
 
     /// Fixed whitelist of Main columns read from a source database, with the literal used when absent.
     private static let sourceColumns: [(name: String, fallback: String)] = [
         ("lID", "0"), ("lDate", "0"), ("mText", "''"), ("bIsGroup", "0"), ("lParentID", "-1"),
         ("lDontAutoDelete", "0"), ("QuickPasteText", "''"), ("clipOrder", "0"), ("lastPasteDate", "0"),
+        ("isLocked", "0"),
     ]
 
     private static func tableColumns(_ db: SQLiteDatabase, mainTable: Bool) throws -> Set<String> {
@@ -158,7 +161,7 @@ public enum ImportExport {
         while try st.step() {
             rows.append(SourceRow(id: st.int64(0), date: st.int64(1), text: st.string(2), isGroup: st.int64(3) != 0,
                                   parentID: st.int64(4), dontAutoDelete: st.int64(5) != 0, quickPasteText: st.string(6),
-                                  clipOrder: st.double(7), lastPasteDate: st.int64(8)))
+                                  clipOrder: st.double(7), lastPasteDate: st.int64(8), isLocked: st.int64(9) != 0))
         }
         return rows
     }
@@ -169,9 +172,11 @@ public enum ImportExport {
         let rows = try readSourceRows(src)
         let dataCols = try tableColumns(src, mainTable: false)
         let hasData = dataCols.contains("lParentID") && dataCols.contains("strClipBoardFormat") && dataCols.contains("ooData")
-        let dataStmt = hasData
-            ? try src.prepare("SELECT substr(strClipBoardFormat, 1, 256), ooData FROM Data WHERE lParentID = ? AND length(ooData) <= ? ORDER BY lID")
-            : nil
+        // Encrypted (vault) blobs of a DittoMac v2 database are never imported: they are unreadable here.
+        let dataSQL = dataCols.contains("encrypted")
+            ? "SELECT substr(strClipBoardFormat, 1, 256), ooData FROM Data WHERE lParentID = ? AND length(ooData) <= ? AND encrypted = 0 ORDER BY lID"
+            : "SELECT substr(strClipBoardFormat, 1, 256), ooData FROM Data WHERE lParentID = ? AND length(ooData) <= ? ORDER BY lID"
+        let dataStmt = hasData ? try src.prepare(dataSQL) : nil
 
         // Groups, parents first; reuse existing groups with the same name under the same parent.
         let groupRows = rows.filter(\.isGroup)
@@ -205,6 +210,7 @@ public enum ImportExport {
         }
 
         for row in rows where !row.isGroup {
+            if row.isLocked { summary.skipped += 1; continue }
             var formats: [ClipFormat] = []
             if let dataStmt {
                 dataStmt.reset()

@@ -6,21 +6,40 @@ import DittoCore
 
 struct AppTheme {
     let spec: ThemeSpec
+    /// Selection colour override ("#RRGGBB", "" = theme / system selection colour). Preferences › Appearance › Accent.
+    var accentHex: String = ""
 
     private static var cached: AppTheme?
     private static var override: AppTheme?
 
-    /// The theme selected in Settings (re-read whenever the theme name changes). Assigning pins a theme.
+    /// The theme selected in Settings (built-in or custom; re-read whenever the theme name or accent changes).
+    /// Assigning pins a theme (offscreen proofs).
     static var current: AppTheme {
         get {
             if let o = override { return o }
             let name = Settings.shared.themeName
-            if let c = cached, c.spec.name == name { return c }
-            let t = AppTheme(spec: ThemeData.named(name))
+            let accent = Settings.shared.accentColorHex
+            if let c = cached, c.spec.name == name || (c.spec.name == ThemeData.systemName && !Self.exists(name)),
+               c.accentHex == accent { return c }
+            let t = AppTheme(spec: Self.spec(named: name), accentHex: accent)
             cached = t
             return t
         }
         set { override = newValue }
+    }
+
+    /// Drops the cached theme (after a custom theme was saved / deleted).
+    static func invalidate() { cached = nil }
+
+    /// Built-in theme by name, else a custom theme, else System.
+    static func spec(named name: String) -> ThemeSpec {
+        if let b = ThemeData.all.first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) { return b }
+        return CustomThemes.shared.spec(named: name) ?? ThemeData.system
+    }
+
+    private static func exists(_ name: String) -> Bool {
+        ThemeData.all.contains { $0.name.caseInsensitiveCompare(name) == .orderedSame }
+            || CustomThemes.shared.spec(named: name) != nil
     }
 
     var isSystem: Bool { spec.colors.isEmpty || spec.name == ThemeData.systemName }
@@ -53,13 +72,23 @@ struct AppTheme {
         odd ? color("ListBoxOddRowsText", fallback: .labelColor) : color("ListBoxEvenRowsText", fallback: .labelColor)
     }
 
+    private var accent: HexColor? { accentHex.isEmpty ? nil : HexColor(accentHex) }
+
     func selectionBackground(emphasized: Bool) -> NSColor {
+        if let a = accent {
+            let c = NSColor(srgbRed: a.r, green: a.g, blue: a.b, alpha: 1)
+            return emphasized ? c : c.withAlphaComponent(0.45)
+        }
         let fb: NSColor = emphasized ? .selectedContentBackgroundColor : .unemphasizedSelectedContentBackgroundColor
         return color("ListBoxSelectedBG", fallback: fb)
     }
 
     func selectionText(emphasized: Bool) -> NSColor {
-        color("ListBoxSelectedText", fallback: emphasized ? .alternateSelectedControlTextColor : .labelColor)
+        if let a = accent {
+            let t = a.contrastingText
+            return emphasized ? NSColor(srgbRed: t.r, green: t.g, blue: t.b, alpha: 1) : rowText(odd: true)
+        }
+        return color("ListBoxSelectedText", fallback: emphasized ? .alternateSelectedControlTextColor : .labelColor)
     }
 
     var pastedColor: NSColor { color("ClipPastedColor", fallback: .systemGreen) }

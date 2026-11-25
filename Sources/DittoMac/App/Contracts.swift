@@ -69,7 +69,7 @@ protocol HotKeyRegistering: AnyObject {
 }
 
 enum PreferencesTab: String, CaseIterable {
-    case general, quickPaste, keyboard, copyBuffers, types, friends, rules, stats, advanced
+    case general, appearance, quickPaste, keyboard, screenshots, security, sync, copyBuffers, types, friends, rules, stats, advanced
 }
 
 @MainActor
@@ -82,6 +82,8 @@ protocol WindowRouting: AnyObject {
     func showCompare(leftID: Int64, rightID: Int64)
     func showDeleteClipData()
     func showAbout()
+    /// Floating desktop note window for a clip (a sticky note). Locked notes show an unlock view while locked.
+    func showStickyNote(clipID: Int64)
     /// Group picker sheet/window. completion(nil) = cancelled, (-1) = top level, else group id.
     func pickGroup(title: String, completion: @escaping (Int64?) -> Void)
     /// Simple text prompt (e.g. new group name). completion(nil) = cancelled.
@@ -105,6 +107,54 @@ protocol CopyBuffersServicing: AnyObject {
     func reloadHotkeys()
 }
 
+// MARK: v1.2 services (screenshots, vault, sync)
+
+/// Lightshot-style capture: frozen-screen overlay, selection, annotation tools, beautify, copy/save/upload/share.
+@MainActor
+protocol ScreenshotServicing: AnyObject {
+    func captureArea()
+    func captureWindow()
+    func captureFullScreen()
+    /// (Re)register the capture hotkeys ("captureArea", "captureWindow", "captureFullScreen") from Settings.
+    func registerHotkeys()
+    func hasScreenRecordingPermission(prompt: Bool) -> Bool
+    /// Human-readable problems from the last `registerHotkeys()` (a shortcut macOS refused because it is in use).
+    var hotkeyProblems: [String] { get }
+}
+
+enum VaultMethod: String, CaseIterable {
+    case system      // Touch ID or the Mac login password (macOS prompt; the app never sees the password)
+    case password    // a separate DittoMac password
+}
+
+/// Locks clips/sticky notes: encrypted at rest, hidden until unlocked, protected from deletion.
+@MainActor
+protocol VaultServicing: AnyObject {
+    var isSetUp: Bool { get }
+    var method: VaultMethod { get }
+    var isUnlocked: Bool { get }
+    var autoLockMinutes: Int { get set }
+    /// Authenticate if needed. completion(true) when the vault is unlocked (immediately if it already is).
+    func requestUnlock(reason: String, completion: @escaping (Bool) -> Void)
+    func lockNow()
+    /// Lock clips (first use runs setup: choose Mac password/Touch ID or a new password).
+    func lock(clipIDs: [Int64], completion: @escaping (Bool) -> Void)
+    /// Permanently remove the lock from clips (requires authentication).
+    func removeLock(clipIDs: [Int64], completion: @escaping (Bool) -> Void)
+    func configure(method: VaultMethod, newPassword: String?, completion: @escaping (Bool) -> Void)
+}
+
+/// Encrypted sync/backup through any folder your cloud app syncs (Google Drive, iCloud Drive, Dropbox, OneDrive …).
+@MainActor
+protocol SyncServicing: AnyObject {
+    var statusText: String { get }
+    var lastSync: Date? { get }
+    /// Sync is on and has a folder and a passphrase, so `syncNow()` can do something.
+    var isReady: Bool { get }
+    func applySettings()
+    func syncNow()
+}
+
 /// Central app state / service locator. Created in AppDelegate.
 @MainActor
 final class AppState {
@@ -119,6 +169,9 @@ final class AppState {
     var windows: WindowRouting!
     var friends: FriendsServicing?
     var copyBuffers: CopyBuffersServicing?
+    var screenshots: ScreenshotServicing?
+    var vault: VaultServicing?
+    var sync: SyncServicing?
 
     /// Show / toggle the Quick Paste popup (set by the popup controller).
     /// Request a debounced retention pass (set by AppDelegate).

@@ -56,6 +56,13 @@ final class QuickPasteController: NSObject, NSWindowDelegate, NSTableViewDataSou
     let statusLabel = NSTextField(labelWithString: "")
     let gearButton = NSButton()
     let moreButton = NSButton()
+    /// Vault state in the bottom bar (🔒 / 🔓); click = lock now / unlock. Hidden until the vault is set up.
+    let lockButton = NSButton()
+    let bottomSeparator = NSBox()
+    /// Behind-window vibrancy for the translucent popup material.
+    let effectView = NSVisualEffectView()
+    /// Appearance settings for the rows (density, radius, timestamps …), refreshed by applySettings().
+    private(set) var rowStyle = ClipRowStyle()
     private let tableMenu = NSMenu()
     private let gearMenu = NSMenu()
     private let moreMenu = NSMenu()
@@ -124,6 +131,7 @@ final class QuickPasteController: NSObject, NSWindowDelegate, NSTableViewDataSou
         nc.addObserver(self, selector: #selector(clipsChangedNote), name: .dittoClipsChanged, object: nil)
         nc.addObserver(self, selector: #selector(settingsChangedNote), name: .dittoSettingsChanged, object: nil)
         nc.addObserver(self, selector: #selector(connectionChangedNote), name: .dittoConnectionChanged, object: nil)
+        nc.addObserver(self, selector: #selector(vaultChangedNote), name: .dittoVaultChanged, object: nil)
         appObservers.append(nc.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.appResignedActive() }
         })
@@ -136,6 +144,14 @@ final class QuickPasteController: NSObject, NSWindowDelegate, NSTableViewDataSou
 
     private func buildUI() {
         guard let content = panel.contentView else { return }
+
+        effectView.material = .popover
+        effectView.blendingMode = .behindWindow
+        effectView.state = .active
+        effectView.frame = content.bounds
+        effectView.autoresizingMask = [.width, .height]
+        effectView.isHidden = true
+        content.addSubview(effectView)
 
         // Search row.
         searchField.placeholderString = "Search"
@@ -228,13 +244,16 @@ final class QuickPasteController: NSObject, NSWindowDelegate, NSTableViewDataSou
         sidebarScroll.isHidden = !settings.defaults.bool(forKey: sidebarKey)
 
         // Status row.
-        statusLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        statusLabel.font = .systemFont(ofSize: 11)
         statusLabel.lineBreakMode = .byTruncatingTail
         statusLabel.textColor = .secondaryLabelColor
         statusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        for (b, sym, tip, act) in [(gearButton, "gearshape", "Clip actions", #selector(gearClicked(_:))),
+        let symbolConfig = NSImage.SymbolConfiguration(pointSize: 12, weight: .regular)
+        for (b, sym, tip, act) in [(lockButton, "lock.fill", "Lock or unlock your locked notes (⇧⌘L)", #selector(lockClicked(_:))),
+                                   (gearButton, "gearshape", "Clip actions", #selector(gearClicked(_:))),
                                    (moreButton, "ellipsis.circle", "More", #selector(moreClicked(_:)))] {
-            b.image = NSImage(systemSymbolName: sym, accessibilityDescription: tip)
+            b.image = NSImage(systemSymbolName: sym, accessibilityDescription: tip)?.withSymbolConfiguration(symbolConfig)
+            b.contentTintColor = .secondaryLabelColor
             b.isBordered = false
             b.bezelStyle = .texturedRounded
             b.toolTip = tip
@@ -244,30 +263,41 @@ final class QuickPasteController: NSObject, NSWindowDelegate, NSTableViewDataSou
         }
         gearMenu.delegate = self
         moreMenu.delegate = self
-        let statusRow = NSStackView(views: [statusLabel, gearButton, moreButton])
+        lockButton.isHidden = true
+        let statusRow = NSStackView(views: [statusLabel, lockButton, gearButton, moreButton])
         statusRow.orientation = .horizontal
-        statusRow.spacing = 6
+        statusRow.spacing = 8
         statusRow.translatesAutoresizingMaskIntoConstraints = false
+        bottomSeparator.boxType = .separator
+        bottomSeparator.translatesAutoresizingMaskIntoConstraints = false
 
         content.addSubview(searchRow)
         content.addSubview(splitView)
         content.addSubview(statusRow)
+        content.addSubview(bottomSeparator)
         let guide = content.safeAreaLayoutGuide
         NSLayoutConstraint.activate([
             searchRow.topAnchor.constraint(equalTo: guide.topAnchor, constant: 6),
-            searchRow.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 8),
-            searchRow.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -8),
-            splitView.topAnchor.constraint(equalTo: searchRow.bottomAnchor, constant: 6),
+            searchRow.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 10),
+            searchRow.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -10),
+            splitView.topAnchor.constraint(equalTo: searchRow.bottomAnchor, constant: 7),
             splitView.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             splitView.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            statusRow.topAnchor.constraint(equalTo: splitView.bottomAnchor, constant: 3),
-            statusRow.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 8),
-            statusRow.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -6),
-            statusRow.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -4),
+            bottomSeparator.topAnchor.constraint(equalTo: splitView.bottomAnchor),
+            bottomSeparator.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            bottomSeparator.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            statusRow.topAnchor.constraint(equalTo: bottomSeparator.bottomAnchor, constant: 4),
+            statusRow.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 10),
+            statusRow.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -8),
+            statusRow.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -5),
             statusRow.heightAnchor.constraint(equalToConstant: 18),
             sidebarScroll.widthAnchor.constraint(greaterThanOrEqualToConstant: 110),
         ])
-        DispatchQueue.main.async { [weak self] in self?.splitView.setPosition(150, ofDividerAt: 0) }
+        // NSSplitView treats isHidden as "collapsed": setting a position would un-hide a sidebar the user turned off.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.sidebarScroll.isHidden else { return }
+            self.splitView.setPosition(150, ofDividerAt: 0)
+        }
         rebuildSearchMenu()
         syncModePopup()
     }
@@ -276,14 +306,20 @@ final class QuickPasteController: NSObject, NSWindowDelegate, NSTableViewDataSou
 
     func applySettings() {
         let theme = AppTheme.current
+        rowStyle = ClipRowStyle.from(settings)
+        let translucent = rowStyle.translucent
         panel.appearance = theme.appearance
-        panel.backgroundColor = theme.windowBackground
+        panel.isOpaque = !translucent
+        panel.backgroundColor = translucent ? .clear : theme.windowBackground
+        effectView.isHidden = !translucent
         panel.alphaValue = CGFloat(1 - Double(settings.transparencyPercent) / 100)
         panel.level = settings.alwaysOnTop ? .floating : .normal
-        tableView.backgroundColor = theme.listBackground
+        tableView.backgroundColor = translucent ? .clear : theme.listBackground
+        tableScroll.drawsBackground = !translucent
         tableScroll.backgroundColor = theme.listBackground
-        outlineView.backgroundColor = theme.groupTreeBackground
+        outlineView.backgroundColor = translucent ? .clear : theme.groupTreeBackground
         statusLabel.textColor = theme.captionText
+        for b in [lockButton, gearButton, moreButton] { b.contentTintColor = theme.isSystem ? .secondaryLabelColor : theme.captionText }
         tableView.rowHeight = rowHeight()
         syncModePopup()
         rebuildSearchMenu()
@@ -294,12 +330,22 @@ final class QuickPasteController: NSObject, NSWindowDelegate, NSTableViewDataSou
     func rowHeight() -> CGFloat {
         let f = AppTheme.listFont(settings)
         let lineH = ceil(f.ascender - f.descender + f.leading)
-        return max(lineH * CGFloat(settings.linesPerRow) + 6, 20)
+        return CGFloat(settings.rowDensity.rowHeight(lineHeight: Double(lineH), lines: settings.linesPerRow))
     }
 
     @objc private func settingsChangedNote() {
         applySettings()
         tableView.reloadData()
+    }
+
+    /// Vault locked / unlocked: cached previews (thumbnails, rich text) may hold decrypted content, so drop them,
+    /// then reload so locked rows switch between the placeholder and their real text.
+    @objc private func vaultChangedNote() {
+        ClipThumbnailCache.shared.invalidate()
+        dirty = true
+        updateStatus()
+        guard panel.isVisible else { return }
+        reload(keepSelection: true)
     }
 
     @objc private func connectionChangedNote() {
@@ -354,6 +400,10 @@ final class QuickPasteController: NSObject, NSWindowDelegate, NSTableViewDataSou
         panel.makeKeyAndOrderFront(nil)
         panel.makeFirstResponder(tableView)
         installFlagsMonitor()
+        if settings.menuBarCountBaseline != settings.copyCountTotal {
+            settings.menuBarCountBaseline = settings.copyCountTotal
+            NotificationCenter.default.post(name: .dittoMenuBarBadgeChanged, object: nil)
+        }
     }
 
     func hide(restoreFocus: Bool) {
@@ -641,6 +691,16 @@ final class QuickPasteController: NSObject, NSWindowDelegate, NSTableViewDataSou
         var s = parts.joined(separator: " · ")
         if !(state.monitor?.isConnected ?? true) { s += " [Disconnected]" }
         if settings.alwaysOnTop { s += " [Always on top]" }
+        if let v = state.vault, v.isSetUp {
+            s += v.isUnlocked ? "  ·  🔓 Unlocked" : "  ·  🔒 Locked"
+            lockButton.isHidden = false
+            let sym = v.isUnlocked ? "lock.open.fill" : "lock.fill"
+            lockButton.image = NSImage(systemSymbolName: sym, accessibilityDescription: v.isUnlocked ? "Lock notes now" : "Unlock notes")?
+                .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 12, weight: .regular))
+            lockButton.toolTip = v.isUnlocked ? "Lock notes now (⇧⌘L)" : "Unlock locked notes"
+        } else {
+            lockButton.isHidden = true
+        }
         statusLabel.stringValue = s
     }
 
@@ -810,6 +870,8 @@ final class QuickPasteController: NSObject, NSWindowDelegate, NSTableViewDataSou
         pasteSelection(transform: nil)
     }
 
+    @objc private func lockClicked(_ sender: NSButton) { toggleVaultLock() }
+
     @objc private func gearClicked(_ sender: NSButton) {
         contextMenu.buildClipMenu(into: gearMenu)
         gearMenu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.height + 2), in: sender)
@@ -838,6 +900,7 @@ final class QuickPasteController: NSObject, NSWindowDelegate, NSTableViewDataSou
             return v
         }()
         rv.rowIndex = row
+        rv.style = rowStyle
         return rv
     }
 
@@ -850,9 +913,10 @@ final class QuickPasteController: NSObject, NSWindowDelegate, NSTableViewDataSou
         }()
         cell.font = AppTheme.listFont(settings)
         cell.linesPerRow = settings.linesPerRow
+        let hidden = clip.isLocked && !isVaultUnlocked
         let k = kind(of: clip)
         var thumb: NSImage?
-        if settings.drawThumbnails, k == .image {
+        if settings.drawThumbnails, k == .image, !hidden {
             let maxPixel = Int(tableView.rowHeight * 2 * 2.5)
             thumb = ClipThumbnailCache.shared.thumbnail(for: clip.id, maxPixel: max(maxPixel, 64), store: store) { [weak self] id in
                 guard let self, let r = self.clips.firstIndex(where: { $0.id == id }) else { return }
@@ -861,18 +925,29 @@ final class QuickPasteController: NSObject, NSWindowDelegate, NSTableViewDataSou
         }
         var indexLabel: String?
         if settings.showFirstTenIndex, row < 10 {
-            indexLabel = "\((row + settings.firstTenHotKeysStart) % 10)"
+            indexLabel = rowStyle.firstTen.label((row + settings.firstTenHotKeysStart) % 10)
         }
-        cell.model = ClipRowModel(
+        let summary = formatSummary(of: clip)
+        let noteColor = settings.noteColor(for: clip.id)
+        let isNote = !clip.isGroup && (clip.sourceApp == StickyNoteMarker.sourceApp || noteColor != nil)
+        var model = ClipRowModel(
             clip: clip, row: row, kind: k, thumbnail: thumb,
-            swatch: settings.drawCopiedColorCode && !clip.isGroup ? ClipColorCode.color(from: clip.text) : nil,
+            swatch: settings.drawCopiedColorCode && !clip.isGroup && !hidden ? ClipColorCode.color(from: clip.text) : nil,
             indexLabel: indexLabel,
             showPasted: settings.showIfClipWasPasted && clip.wasPasted && !clip.isGroup,
             showSymbols: currentGroupID == nil,
-            highlighter: highlighter,
-            richIndicator: !clip.isGroup && formatSummary(of: clip).hasRichText,
-            imageIndicator: !clip.isGroup && formatSummary(of: clip).hasImage && formatSummary(of: clip).hasText,
-            rich: settings.drawRTF && !clip.isGroup ? ClipRTFCache.shared.attributed(for: clip.id, store: store) : nil)
+            highlighter: hidden ? nil : highlighter,
+            richIndicator: !clip.isGroup && summary.hasRichText,
+            imageIndicator: !clip.isGroup && summary.hasImage && summary.hasText,
+            rich: settings.drawRTF && !clip.isGroup && !hidden ? ClipRTFCache.shared.attributed(for: clip.id, store: store) : nil)
+        model.isLocked = clip.isLocked
+        model.contentHidden = hidden
+        model.isNote = isNote
+        model.noteColor = isNote ? AppearanceManager.color((noteColor ?? .yellow).paper(dark: false)) : nil
+        model.appIcon = rowStyle.showAppIcon && !clip.isGroup ? AppIconCache.shared.icon(for: clip.sourceApp) : nil
+        model.timestamp = rowStyle.showTimestamp && !clip.isGroup ? RelativeTime.short(clip.date) : nil
+        model.style = rowStyle
+        cell.model = model
         loadMoreIfNeeded(row: row)
         return cell
     }
@@ -885,6 +960,9 @@ final class QuickPasteController: NSObject, NSWindowDelegate, NSTableViewDataSou
     /// them to Finder, the desktop, Mail or another app copies every one of them.
     func tableView(_ tableView: NSTableView, pasteboardWriterForRow row: Int) -> NSPasteboardWriting? {
         guard let clip = clip(atRow: row) else { return nil }
+        // Locked notes can't be dragged out while the vault is locked (they have no readable data).
+        if clip.isLocked && !isVaultUnlocked { return nil }
+        if clip.isLocked { (state.vault as? VaultService)?.noteActivity() }
         return ClipDragWriter.make(clip: clip, index: row + 1, store: store)
     }
 

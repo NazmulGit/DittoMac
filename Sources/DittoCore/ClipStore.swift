@@ -2,9 +2,29 @@
 //
 // Security invariant: every value reaches SQLite through a bound parameter. SQL text is assembled only
 // from constant fragments defined in this file and in SearchQuery (fixed column names).
+//
+// Vault (schema v2): locked clips keep their formats AES-GCM encrypted (`Data.encrypted = 1`) and their
+// description / quick-paste text in `Main.lockedText`; `Main.mText` holds only a placeholder. Without
+// `vaultKey` they read as placeholders with no formats, and no delete path except `deleteLocked` (which
+// needs an unlocked session) or `purgeLockedClips` (vault reset) removes them. See docs/kb/vault.md.
 
 import Foundation
 import SQLite3
+import CryptoKit
+
+public enum ClipStoreError: Error, Equatable, LocalizedError {
+    /// The operation needs the vault key (an unlocked vault session).
+    case locked
+    /// Locked data could not be decrypted with the current vault key (wrong key or damaged data).
+    case decryptionFailed
+
+    public var errorDescription: String? {
+        switch self {
+        case .locked: return "Unlock your locked notes first."
+        case .decryptionFailed: return "A locked note couldn’t be decrypted with the current vault key."
+        }
+    }
+}
 
 public final class ClipStore: @unchecked Sendable {
     public struct AddOptions: Sendable {
@@ -17,7 +37,9 @@ public final class ClipStore: @unchecked Sendable {
     }
 
     /// Schema version stored in PRAGMA user_version.
-    static let schemaVersion: Int64 = 1
+    static let schemaVersion: Int64 = 2
+    /// What a locked clip's description reads as (and what `Main.mText` holds for it).
+    public static let lockedPlaceholder = "Locked note"
     /// Gap below which ordering values are renormalised before computing a midpoint.
     static let minOrderGap = 1e-6
 
@@ -25,6 +47,14 @@ public final class ClipStore: @unchecked Sendable {
     private let db: SQLiteDatabase
     private let lock = NSLock()
     private let isMemory: Bool
+    private var _vaultKey: SymmetricKey?
+
+    /// The vault data key while the vault is unlocked (set by the app), nil while locked. With a key, locked
+    /// clips read transparently decrypted; without one they read as placeholders with no formats.
+    public var vaultKey: SymmetricKey? {
+        get { locked { _vaultKey } }
+        set { locked { _vaultKey = newValue } }
+    }
 
     // MARK: - init
 
@@ -49,6 +79,8 @@ public final class ClipStore: @unchecked Sendable {
         db = try SQLiteDatabase(path: isMemory ? ":memory:" : path)
         try db.registerRegexpFunction()
         try db.exec("PRAGMA foreign_keys = ON")
+        // Overwrite freed pages/cells so plaintext replaced by `lock` (or deleted clips) doesn't linger in the file.
+        try db.exec("PRAGMA secure_delete = ON")
         if !isMemory { try db.exec("PRAGMA journal_mode = WAL") }
         try migrate()
         if !isMemory {
@@ -100,7 +132,29 @@ public final class ClipStore: @unchecked Sendable {
                 """)
             }
         }
-        // Future migrations: `if version < 2 { ... PRAGMA user_version = 2 }`.
+        if version < 2 {
+            try db.transaction {
+                if try !hasColumn(mainTable: true, "isLocked") {
+                    try db.exec("ALTER TABLE Main ADD COLUMN isLocked INTEGER NOT NULL DEFAULT 0")
+                }
+                if try !hasColumn(mainTable: true, "lockedText") {
+                    try db.exec("ALTER TABLE Main ADD COLUMN lockedText BLOB")
+                }
+                if try !hasColumn(mainTable: false, "encrypted") {
+                    try db.exec("ALTER TABLE Data ADD COLUMN encrypted INTEGER NOT NULL DEFAULT 0")
+                }
+                try db.exec("PRAGMA user_version = 2")
+            }
+        }
+        // Future migrations: `if version < 3 { ... PRAGMA user_version = 3 }`.
+    }
+
+    private func hasColumn(mainTable: Bool, _ name: String) throws -> Bool {
+        let st = try db.prepare(mainTable ? "PRAGMA table_info(Main)" : "PRAGMA table_info(Data)")
+        while try st.step() {
+            if st.string(1) == name { return true }
+        }
+        return false
     }
 
     @discardableResult
@@ -116,19 +170,19 @@ public final class ClipStore: @unchecked Sendable {
     Main.lID, Main.lDate, Main.mText, Main.lShortCut, Main.lDontAutoDelete, Main.CRC, Main.bIsGroup, \
     Main.lParentID, Main.QuickPasteText, Main.clipOrder, Main.clipGroupOrder, Main.globalShortCut, \
     Main.lastPasteDate, Main.stickyClipOrder, Main.stickyClipGroupOrder, Main.MoveToGroupShortCut, \
-    Main.GlobalMoveToGroupShortCut, Main.sourceApp
+    Main.GlobalMoveToGroupShortCut, Main.sourceApp, Main.isLocked, Main.lockedText
     """
-    static let mainColumnCount: Int32 = 18
+    static let mainColumnCount: Int32 = 20
     static let historyOrder = " ORDER BY Main.stickyClipOrder DESC, Main.bIsGroup ASC, Main.clipOrder DESC"
     static let groupOrder = " ORDER BY Main.stickyClipGroupOrder DESC, Main.bIsGroup ASC, Main.clipGroupOrder DESC"
     /// Upstream auto-delete protection: two binds (sentinel, sentinel).
     static let deletableWhere = """
     bIsGroup = 0 AND lShortCut = 0 AND lParentID <= 0 AND lDontAutoDelete = 0 \
-    AND stickyClipOrder = ? AND stickyClipGroupOrder = ?
+    AND stickyClipOrder = ? AND stickyClipGroupOrder = ? AND isLocked = 0
     """
     static let fullTextJoin = """
      LEFT JOIN Data ft ON ft.lID = (SELECT d.lID FROM Data d WHERE d.lParentID = Main.lID \
-    AND d.strClipBoardFormat = ? ORDER BY d.lID LIMIT 1)
+    AND d.strClipBoardFormat = ? AND d.encrypted = 0 ORDER BY d.lID LIMIT 1)
     """
 
     private static func seconds(_ d: Date) -> Int64 {
@@ -139,6 +193,19 @@ public final class ClipStore: @unchecked Sendable {
     private static func date(_ s: Int64) -> Date { Date(timeIntervalSince1970: TimeInterval(s)) }
 
     private func readClip(_ st: SQLiteStatement, _ o: Int32 = 0) -> Clip {
+        var c = readPlainClip(st, o)
+        if c.isLocked {
+            c.text = Self.lockedPlaceholder
+            c.quickPasteText = ""
+            if let key = _vaultKey, let t = Self.openLockedText(st.data(o + 19), key: key, clipID: c.id) {
+                c.text = t.description
+                c.quickPasteText = t.quickPasteText
+            }
+        }
+        return c
+    }
+
+    private func readPlainClip(_ st: SQLiteStatement, _ o: Int32) -> Clip {
         Clip(id: st.int64(o),
              date: Self.date(st.int64(o + 1)),
              text: st.string(o + 2),
@@ -156,7 +223,43 @@ public final class ClipStore: @unchecked Sendable {
              stickyClipGroupOrder: st.double(o + 14),
              moveToGroupShortcut: st.int(o + 15),
              globalMoveToGroupShortcut: st.int64(o + 16) != 0,
-             sourceApp: st.string(o + 17))
+             sourceApp: st.string(o + 17),
+             isLocked: st.int64(o + 18) != 0)
+    }
+
+    // MARK: vault helpers
+
+    private struct LockedText: Codable {
+        var description: String
+        var quickPasteText: String
+    }
+
+    private static func sealLockedText(description: String, quickPasteText: String, key: SymmetricKey, clipID: Int64) throws -> Data {
+        let json = try JSONEncoder().encode(LockedText(description: description, quickPasteText: quickPasteText))
+        return try Vault.seal(json, key: key, aad: Vault.textAAD(clipID: clipID))
+    }
+
+    private static func openLockedText(_ blob: Data, key: SymmetricKey, clipID: Int64) -> LockedText? {
+        guard !blob.isEmpty, let json = try? Vault.open(blob, key: key, aad: Vault.textAAD(clipID: clipID)) else { return nil }
+        return try? JSONDecoder().decode(LockedText.self, from: json)
+    }
+
+    private func rowIsLocked(_ id: Int64) throws -> Bool {
+        (try db.scalarInt("SELECT isLocked FROM Main WHERE lID = ?", [.int(id)]) ?? 0) != 0
+    }
+
+    private func lockedTextBlob(_ id: Int64) throws -> Data {
+        let st = try db.prepare("SELECT lockedText FROM Main WHERE lID = ?")
+        try st.bind(1, id)
+        return try st.step() ? st.data(0) : Data()
+    }
+
+    private static func randomCRC() -> Int64 { Int64(Int32.random(in: Int32.min...Int32.max)) }
+
+    /// Flushes the WAL into the main file and truncates it so old plaintext page images don't linger there.
+    private func checkpointQuietly() {
+        guard !isMemory else { return }
+        try? db.exec("PRAGMA wal_checkpoint(TRUNCATE)")
     }
 
     private func fetchClips(_ sql: String, _ binds: [SQLiteValue]) throws -> [Clip] {
@@ -184,13 +287,20 @@ public final class ClipStore: @unchecked Sendable {
         return db.lastInsertRowID
     }
 
-    private func insertFormats(_ clipID: Int64, _ formats: [ClipFormat]) throws {
-        let st = try db.prepare("INSERT INTO Data(lParentID, strClipBoardFormat, ooData) VALUES(?,?,?)")
+    /// Inserts formats; with `encryptWith` each blob is sealed (AAD binds clip id + type) and flagged encrypted.
+    private func insertFormats(_ clipID: Int64, _ formats: [ClipFormat], encryptWith key: SymmetricKey? = nil) throws {
+        let st = try db.prepare("INSERT INTO Data(lParentID, strClipBoardFormat, ooData, encrypted) VALUES(?,?,?,?)")
         for f in formats {
             st.reset()
             try st.bind(1, clipID)
             try st.bind(2, f.type)
-            try st.bind(3, f.data)
+            if let key {
+                try st.bind(3, try Vault.seal(f.data, key: key, aad: Vault.dataAAD(clipID: clipID, type: f.type)))
+                try st.bind(4, 1)
+            } else {
+                try st.bind(3, f.data)
+                try st.bind(4, 0)
+            }
             try st.step()
         }
     }
@@ -199,11 +309,22 @@ public final class ClipStore: @unchecked Sendable {
         try fetchClips("SELECT " + Self.mainColumns + " FROM Main WHERE Main.lID = ?", [.int(id)]).first
     }
 
+    /// Formats of a clip. Encrypted rows are decrypted with the vault key; without a key (or when a row fails
+    /// to authenticate) they are left out, so a locked clip reads as having no formats.
     private func _formats(_ clipID: Int64) throws -> [ClipFormat] {
-        let st = try db.prepare("SELECT lID, strClipBoardFormat, ooData FROM Data WHERE lParentID = ? ORDER BY lID")
+        let st = try db.prepare("SELECT lID, strClipBoardFormat, ooData, encrypted FROM Data WHERE lParentID = ? ORDER BY lID")
         try st.bind(1, clipID)
         var out: [ClipFormat] = []
-        while try st.step() { out.append(ClipFormat(id: st.int64(0), type: st.string(1), data: st.data(2))) }
+        while try st.step() {
+            let type = st.string(1)
+            if st.int64(3) != 0 {
+                guard let key = _vaultKey,
+                      let plain = try? Vault.open(st.data(2), key: key, aad: Vault.dataAAD(clipID: clipID, type: type)) else { continue }
+                out.append(ClipFormat(id: st.int64(0), type: type, data: plain))
+            } else {
+                out.append(ClipFormat(id: st.int64(0), type: type, data: st.data(2)))
+            }
+        }
         return out
     }
 
@@ -224,6 +345,10 @@ public final class ClipStore: @unchecked Sendable {
     }
 
     private func recomputeCRC(_ clipID: Int64) throws {
+        if try rowIsLocked(clipID) {   // never store a CRC that could confirm a locked clip's content
+            try db.run("UPDATE Main SET CRC = ? WHERE lID = ?", [.int(Self.randomCRC()), .int(clipID)])
+            return
+        }
         let crc = CRC32.clipCRC(try _formats(clipID))
         try db.run("UPDATE Main SET CRC = ? WHERE lID = ?", [.int(Int64(crc)), .int(clipID)])
     }
@@ -245,12 +370,12 @@ public final class ClipStore: @unchecked Sendable {
                     var dupID: Int64?
                     if !options.allowDuplicates {
                         dupID = try db.scalarInt("""
-                        SELECT lID FROM Main WHERE CRC = ? AND bIsGroup = 0 AND lParentID = ? \
+                        SELECT lID FROM Main WHERE CRC = ? AND bIsGroup = 0 AND lParentID = ? AND isLocked = 0 \
                         ORDER BY clipOrder DESC LIMIT 1
                         """, [.int(Int64(crc)), .int(Ditto.topLevelParent)])
                     } else if !options.allowBackToBackDuplicates {
-                        let st = try db.prepare("SELECT lID, CRC FROM Main WHERE bIsGroup = 0 ORDER BY lID DESC LIMIT 1")
-                        if try st.step(), Int32(truncatingIfNeeded: st.int64(1)) == crc { dupID = st.int64(0) }
+                        let st = try db.prepare("SELECT lID, CRC, isLocked FROM Main WHERE bIsGroup = 0 ORDER BY lID DESC LIMIT 1")
+                        if try st.step(), st.int64(2) == 0, Int32(truncatingIfNeeded: st.int64(1)) == crc { dupID = st.int64(0) }
                     }
                     if let dupID {
                         try db.run("UPDATE Main SET clipOrder = ? WHERE lID = ?", [.double(try maxClipOrder() + 1), .int(dupID)])
@@ -351,22 +476,45 @@ public final class ClipStore: @unchecked Sendable {
         try locked { try _formats(clipID) }
     }
 
+    /// Formats of a clip that is NOT locked, read atomically with the lock check (nil for a locked clip, even while
+    /// the vault is unlocked). Background readers (sync) use this so a clip locked after they listed it is never
+    /// read as plaintext.
+    public func unlockedFormats(clipID: Int64) throws -> [ClipFormat]? {
+        try locked {
+            if try rowIsLocked(clipID) { return nil }
+            return try _formats(clipID)
+        }
+    }
+
+    /// Stored types and (plaintext) sizes. Encrypted formats are listed only while the vault key is set.
     public func formatTypes(clipID: Int64) throws -> [(type: String, size: Int)] {
         try locked {
-            let st = try db.prepare("SELECT strClipBoardFormat, LENGTH(ooData) FROM Data WHERE lParentID = ? ORDER BY lID")
+            let st = try db.prepare("SELECT strClipBoardFormat, LENGTH(ooData), encrypted FROM Data WHERE lParentID = ? ORDER BY lID")
             try st.bind(1, clipID)
             var out: [(type: String, size: Int)] = []
-            while try st.step() { out.append((st.string(0), st.int(1))) }
+            while try st.step() {
+                if st.int64(2) != 0 {
+                    guard _vaultKey != nil else { continue }
+                    out.append((st.string(0), max(0, st.int(1) - Vault.sealOverhead)))
+                } else {
+                    out.append((st.string(0), st.int(1)))
+                }
+            }
             return out
         }
     }
 
     public func data(clipID: Int64, type: String) throws -> Data? {
         try locked {
-            let st = try db.prepare("SELECT ooData FROM Data WHERE lParentID = ? AND strClipBoardFormat = ? ORDER BY lID LIMIT 1")
+            let st = try db.prepare("SELECT ooData, encrypted FROM Data WHERE lParentID = ? AND strClipBoardFormat = ? ORDER BY lID LIMIT 1")
             try st.bind(1, clipID)
             try st.bind(2, type)
-            return try st.step() ? st.data(0) : nil
+            guard try st.step() else { return nil }
+            if st.int64(1) != 0 {
+                guard let key = _vaultKey else { return nil }
+                return try? Vault.open(st.data(0), key: key, aad: Vault.dataAAD(clipID: clipID, type: type))
+            }
+            return st.data(0)
         }
     }
 
@@ -409,20 +557,58 @@ public final class ClipStore: @unchecked Sendable {
 
     // MARK: - mutation
 
+    static let updateMainSQL = """
+    UPDATE Main SET lDate = ?, mText = ?, lShortCut = ?, lDontAutoDelete = ?, CRC = ?, bIsGroup = ?, \
+    lParentID = ?, QuickPasteText = ?, clipOrder = ?, clipGroupOrder = ?, globalShortCut = ?, \
+    lastPasteDate = ?, stickyClipOrder = ?, stickyClipGroupOrder = ?, MoveToGroupShortCut = ?, \
+    GlobalMoveToGroupShortCut = ?, sourceApp = ? WHERE lID = ?
+    """
+
+    /// Writes every Main column of `clip` except the lock state (`isLocked` is changed only by `lock` /
+    /// `removeLock`). For a locked clip the plaintext never reaches `mText`: with the vault key the new
+    /// description / quick-paste text are re-encrypted into `lockedText`; without it text changes are ignored.
+    /// A clip still carrying the placeholder text (read while locked) keeps its stored text.
     public func update(_ clip: Clip) throws {
         try locked {
-            _ = try db.run("""
-            UPDATE Main SET lDate = ?, mText = ?, lShortCut = ?, lDontAutoDelete = ?, CRC = ?, bIsGroup = ?, \
-            lParentID = ?, QuickPasteText = ?, clipOrder = ?, clipGroupOrder = ?, globalShortCut = ?, \
-            lastPasteDate = ?, stickyClipOrder = ?, stickyClipGroupOrder = ?, MoveToGroupShortCut = ?, \
-            GlobalMoveToGroupShortCut = ?, sourceApp = ? WHERE lID = ?
-            """, mainValues(clip) + [.int(clip.id)])
+            try db.transaction {
+                guard try rowIsLocked(clip.id) else {
+                    _ = try db.run(Self.updateMainSQL, mainValues(clip) + [.int(clip.id)])
+                    return
+                }
+                var c = clip
+                c.crc = Int32(truncatingIfNeeded: try db.scalarInt("SELECT CRC FROM Main WHERE lID = ?", [.int(clip.id)]) ?? 0)
+                c.text = Self.lockedPlaceholder
+                c.quickPasteText = ""
+                c.isGroup = false
+                _ = try db.run(Self.updateMainSQL, mainValues(c) + [.int(clip.id)])
+                let unchanged = clip.text == Self.lockedPlaceholder && clip.quickPasteText.isEmpty
+                if let key = _vaultKey, !unchanged {
+                    let blob = try Self.sealLockedText(description: clip.text, quickPasteText: clip.quickPasteText,
+                                                       key: key, clipID: clip.id)
+                    try db.run("UPDATE Main SET lockedText = ? WHERE lID = ?", [.blob(blob), .int(clip.id)])
+                }
+            }
         }
     }
 
+    /// Replaces a clip's formats. For a locked clip this needs the vault key (throws `ClipStoreError.locked`
+    /// otherwise); the new formats and description are stored encrypted.
     public func replaceFormats(clipID: Int64, formats: [ClipFormat], description: String?) throws {
         try locked {
             try db.transaction {
+                if try rowIsLocked(clipID) {
+                    guard let key = _vaultKey else { throw ClipStoreError.locked }
+                    try db.run("DELETE FROM Data WHERE lParentID = ?", [.int(clipID)])
+                    try insertFormats(clipID, formats, encryptWith: key)
+                    try db.run("UPDATE Main SET CRC = ? WHERE lID = ?", [.int(Self.randomCRC()), .int(clipID)])
+                    if let description {
+                        let old = Self.openLockedText(try lockedTextBlob(clipID), key: key, clipID: clipID)
+                        let blob = try Self.sealLockedText(description: description, quickPasteText: old?.quickPasteText ?? "",
+                                                           key: key, clipID: clipID)
+                        try db.run("UPDATE Main SET lockedText = ? WHERE lID = ?", [.blob(blob), .int(clipID)])
+                    }
+                    return
+                }
                 try db.run("DELETE FROM Data WHERE lParentID = ?", [.int(clipID)])
                 try insertFormats(clipID, formats)
                 try db.run("UPDATE Main SET CRC = ? WHERE lID = ?", [.int(Int64(CRC32.clipCRC(formats))), .int(clipID)])
@@ -433,20 +619,28 @@ public final class ClipStore: @unchecked Sendable {
         }
     }
 
+    /// Deletes one stored format. Formats of a locked clip are only removed while the vault is unlocked
+    /// (silently skipped otherwise).
     public func deleteFormat(formatID: Int64) throws {
         try locked {
             try db.transaction {
                 guard let parent = try db.scalarInt("SELECT lParentID FROM Data WHERE lID = ?", [.int(formatID)]) else { return }
+                if _vaultKey == nil, try rowIsLocked(parent) { return }
                 try db.run("DELETE FROM Data WHERE lID = ?", [.int(formatID)])
                 try recomputeCRC(parent)
             }
         }
     }
 
-    private func _delete(_ ids: [Int64]) throws {
+    /// Deletes clips/groups (group children are re-parented to top level). Locked clips are skipped unless
+    /// `includeLocked`. Returns the number of rows deleted.
+    @discardableResult
+    private func _delete(_ ids: [Int64], includeLocked: Bool = false) throws -> Int {
         let reparent = try db.prepare("UPDATE Main SET lParentID = ?, stickyClipGroupOrder = ? WHERE lParentID = ?")
         let del = try db.prepare("DELETE FROM Main WHERE lID = ?")
+        var deleted = 0
         for id in ids {
+            if !includeLocked, try rowIsLocked(id) { continue }
             reparent.reset()
             try reparent.bind(1, Ditto.topLevelParent)
             try reparent.bind(2, Ditto.stickySentinel)
@@ -455,11 +649,16 @@ public final class ClipStore: @unchecked Sendable {
             del.reset()
             try del.bind(1, id)
             try del.step()
+            deleted += db.changes
         }
         try cleanCopyBuffers()
+        return deleted
     }
 
-    public func delete(ids: [Int64]) throws {
+    /// Deletes clips and groups. Locked clips are never deleted here (they are silently skipped; use
+    /// `deleteLocked`). Returns the number of rows deleted.
+    @discardableResult
+    public func delete(ids: [Int64]) throws -> Int {
         try locked { try db.transaction { try _delete(ids) } }
     }
 
@@ -507,7 +706,7 @@ public final class ClipStore: @unchecked Sendable {
             try db.transaction {
                 var out: [Int64] = []
                 for id in ids {
-                    guard var c = try _clip(id), !c.isGroup else { continue }
+                    guard var c = try _clip(id), !c.isGroup, !c.isLocked else { continue }
                     let formats = try _formats(id)
                     c.parentID = groupID
                     c.clipOrder = try maxClipOrder() + 1
@@ -732,21 +931,27 @@ public final class ClipStore: @unchecked Sendable {
             try db.transaction {
                 // Upstream DeleteNonUsedClips (DatabaseUtilities.cpp:963): delete every clip that is not
                 // protected (group, shortcut, in a group, never-auto-delete, sticky).
-                var n = try db.run("DELETE FROM Main WHERE bIsGroup = 0 AND lShortCut = 0 AND lParentID <= 0 AND lDontAutoDelete = 0 AND stickyClipOrder = -2147483647 AND stickyClipGroupOrder = -2147483647")
+                var n = try db.run("DELETE FROM Main WHERE bIsGroup = 0 AND lShortCut = 0 AND lParentID <= 0 AND lDontAutoDelete = 0 AND stickyClipOrder = -2147483647 AND stickyClipGroupOrder = -2147483647 AND isLocked = 0")
                 try db.run("DELETE FROM Data WHERE lParentID NOT IN (SELECT lID FROM Main)")
-                n += try db.run("DELETE FROM Main WHERE bIsGroup = 0 AND NOT EXISTS (SELECT 1 FROM Data WHERE Data.lParentID = Main.lID)")
+                n += try db.run("DELETE FROM Main WHERE bIsGroup = 0 AND isLocked = 0 AND NOT EXISTS (SELECT 1 FROM Data WHERE Data.lParentID = Main.lID)")
                 try cleanCopyBuffers()
                 return n
             }
         }
     }
 
-    public func deleteAll() throws {
+    /// Deletes every clip and group except locked clips (which move to top level when their group goes).
+    /// Returns the number of rows deleted.
+    @discardableResult
+    public func deleteAll() throws -> Int {
         try locked {
             try db.transaction {
-                try db.run("DELETE FROM Data")
-                try db.run("DELETE FROM Main")
-                try db.run("DELETE FROM CopyBuffers")
+                try db.run("UPDATE Main SET lParentID = ?, stickyClipGroupOrder = ? WHERE isLocked = 1 AND lParentID <> ?",
+                           [.int(Ditto.topLevelParent), .double(Ditto.stickySentinel), .int(Ditto.topLevelParent)])
+                let n = try db.run("DELETE FROM Main WHERE isLocked = 0")
+                try db.run("DELETE FROM Data WHERE lParentID NOT IN (SELECT lID FROM Main)")
+                try cleanCopyBuffers()
+                return n
             }
         }
     }
@@ -810,7 +1015,7 @@ public final class ClipStore: @unchecked Sendable {
                 sql += " AND Data.strClipBoardFormat = ?"
                 binds.append(.text(t))
             }
-            sql += ") FROM Main WHERE Main.bIsGroup = 0"
+            sql += ") FROM Main WHERE Main.bIsGroup = 0 AND Main.isLocked = 0"
             if let t = f.titleContains, !t.isEmpty {
                 sql += " AND Main.mText LIKE ? ESCAPE '\\'"
                 binds.append(.text("%" + SearchQuery.escapeLike(t) + "%"))
@@ -839,7 +1044,7 @@ public final class ClipStore: @unchecked Sendable {
             try db.transaction {
                 guard let types else { try _delete(clipIDs); return }
                 var empty: [Int64] = []
-                for id in clipIDs {
+                for id in clipIDs where try !rowIsLocked(id) {
                     for t in types {
                         try db.run("DELETE FROM Data WHERE lParentID = ? AND strClipBoardFormat = ?", [.int(id), .text(t)])
                     }
@@ -850,5 +1055,124 @@ public final class ClipStore: @unchecked Sendable {
                 if !empty.isEmpty { try _delete(empty) }
             }
         }
+    }
+
+    // MARK: - vault (locked clips)
+
+    /// Locks clips with the session's `vaultKey` (throws `ClipStoreError.locked` when none is set).
+    /// Groups and already-locked clips are skipped. Returns the number of clips locked.
+    @discardableResult
+    public func lock(ids: [Int64]) throws -> Int {
+        try locked {
+            guard let key = _vaultKey else { throw ClipStoreError.locked }
+            return try _lock(ids, key: key)
+        }
+    }
+
+    /// Locks clips with an explicit data key without unlocking the session (locking reveals nothing, so the
+    /// app can lock with the Keychain-held key and no authentication prompt).
+    @discardableResult
+    public func lock(ids: [Int64], key: SymmetricKey) throws -> Int {
+        try locked { try _lock(ids, key: key) }
+    }
+
+    private func _lock(_ ids: [Int64], key: SymmetricKey) throws -> Int {
+        let n: Int = try db.transaction {
+            var n = 0
+            for id in ids {
+                let st = try db.prepare("SELECT bIsGroup, isLocked, mText, QuickPasteText FROM Main WHERE lID = ?")
+                try st.bind(1, id)
+                guard try st.step(), st.int64(0) == 0, st.int64(1) == 0 else { continue }
+                let description = st.string(2)
+                let quickPaste = st.string(3)
+                let rows = try db.prepare("SELECT lID, strClipBoardFormat, ooData FROM Data WHERE lParentID = ? AND encrypted = 0")
+                try rows.bind(1, id)
+                var plain: [(Int64, String, Data)] = []
+                while try rows.step() { plain.append((rows.int64(0), rows.string(1), rows.data(2))) }
+                for (rowID, type, data) in plain {
+                    let sealed = try Vault.seal(data, key: key, aad: Vault.dataAAD(clipID: id, type: type))
+                    try db.run("UPDATE Data SET ooData = ?, encrypted = 1 WHERE lID = ?", [.blob(sealed), .int(rowID)])
+                }
+                let blob = try Self.sealLockedText(description: description, quickPasteText: quickPaste, key: key, clipID: id)
+                try db.run("UPDATE Main SET isLocked = 1, lockedText = ?, mText = ?, QuickPasteText = ?, CRC = ? WHERE lID = ?",
+                           [.blob(blob), .text(Self.lockedPlaceholder), .text(""), .int(Self.randomCRC()), .int(id)])
+                n += 1
+            }
+            return n
+        }
+        if n > 0 { checkpointQuietly() }
+        return n
+    }
+
+    /// Permanently removes the lock: decrypts formats and text back to their original form (CRC recomputed).
+    /// Needs `vaultKey`; throws `ClipStoreError.decryptionFailed` (and changes nothing) if any blob fails to open.
+    @discardableResult
+    public func removeLock(ids: [Int64]) throws -> Int {
+        try locked {
+            guard let key = _vaultKey else { throw ClipStoreError.locked }
+            return try db.transaction {
+                var n = 0
+                for id in ids where try rowIsLocked(id) {
+                    let rows = try db.prepare("SELECT lID, strClipBoardFormat, ooData FROM Data WHERE lParentID = ? AND encrypted = 1")
+                    try rows.bind(1, id)
+                    var sealed: [(Int64, String, Data)] = []
+                    while try rows.step() { sealed.append((rows.int64(0), rows.string(1), rows.data(2))) }
+                    for (rowID, type, blob) in sealed {
+                        guard let plain = try? Vault.open(blob, key: key, aad: Vault.dataAAD(clipID: id, type: type)) else {
+                            throw ClipStoreError.decryptionFailed
+                        }
+                        try db.run("UPDATE Data SET ooData = ?, encrypted = 0 WHERE lID = ?", [.blob(plain), .int(rowID)])
+                    }
+                    guard let text = Self.openLockedText(try lockedTextBlob(id), key: key, clipID: id) else {
+                        throw ClipStoreError.decryptionFailed
+                    }
+                    try db.run("UPDATE Main SET isLocked = 0, lockedText = NULL, mText = ?, QuickPasteText = ? WHERE lID = ?",
+                               [.text(text.description), .text(text.quickPasteText), .int(id)])
+                    try recomputeCRC(id)
+                    n += 1
+                }
+                return n
+            }
+        }
+    }
+
+    public func lockedCount() throws -> Int {
+        try locked { Int(try db.scalarInt("SELECT COUNT(*) FROM Main WHERE isLocked = 1") ?? 0) }
+    }
+
+    /// Ids of all locked clips.
+    public func lockedIDs() throws -> [Int64] {
+        try locked {
+            let st = try db.prepare("SELECT lID FROM Main WHERE isLocked = 1 ORDER BY lID")
+            var out: [Int64] = []
+            while try st.step() { out.append(st.int64(0)) }
+            return out
+        }
+    }
+
+    /// Deliberate deletion that may include locked clips. Needs an unlocked session (`vaultKey` set),
+    /// otherwise throws `ClipStoreError.locked`. Returns the number of rows deleted.
+    @discardableResult
+    public func deleteLocked(ids: [Int64]) throws -> Int {
+        try locked {
+            guard _vaultKey != nil else { throw ClipStoreError.locked }
+            return try db.transaction { try _delete(ids, includeLocked: true) }
+        }
+    }
+
+    /// Vault reset (forgotten password / lost key): permanently deletes every locked clip without needing
+    /// the key. The app must confirm with the user first. Returns the number of clips deleted.
+    @discardableResult
+    public func purgeLockedClips() throws -> Int {
+        let n: Int = try locked {
+            try db.transaction {
+                let n = try db.run("DELETE FROM Main WHERE isLocked = 1")
+                try db.run("DELETE FROM Data WHERE lParentID NOT IN (SELECT lID FROM Main)")
+                try cleanCopyBuffers()
+                return n
+            }
+        }
+        locked { checkpointQuietly() }
+        return n
     }
 }

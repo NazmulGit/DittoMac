@@ -15,8 +15,28 @@ final class WindowRouter: WindowRouting {
     private var deleteData: DeleteClipDataWindowController?
     private var about: AboutWindowController?
     private var pickers: [ObjectIdentifier: GroupPickerController] = [:]
+    /// Clip ids shown by each compare window (to close it when the vault locks).
+    private var compareIDs: [ObjectIdentifier: [Int64]] = [:]
+    /// The QR window shows text taken from a locked note.
+    var qrShowsLockedNote = false
+    private var vaultObserver: NSObjectProtocol?
 
-    init(state: AppState) { self.state = state }
+    init(state: AppState) {
+        self.state = state
+        vaultObserver = NotificationCenter.default.addObserver(forName: .dittoVaultChanged, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.closeLockedContentIfLocked() }
+        }
+    }
+
+    /// When the vault locks, windows that show a locked note's decrypted text (properties, compare, a QR code made
+    /// from it) are closed. Editors and desktop notes handle this themselves; the preview closes itself (see PreviewWindowController).
+    private func closeLockedContentIfLocked() {
+        guard state.vault?.isUnlocked != true else { return }
+        func isLocked(_ id: Int64) -> Bool { ((try? state.store.clip(id: id)) ?? nil)?.isLocked == true }
+        for (id, c) in properties where isLocked(id) { c.window?.close() }
+        for (key, c) in compares where (compareIDs[key] ?? []).contains(where: isLocked) { c.window?.close() }
+        if qrShowsLockedNote { qr?.window?.close(); qrShowsLockedNote = false }
+    }
 
     private func activate() { NSApp.activate(ignoringOtherApps: true) }
 
@@ -64,9 +84,10 @@ final class WindowRouter: WindowRouting {
     }
 
     func showQRCode(text: String) {
+        qrShowsLockedNote = false      // the caller sets it again for text from a locked note
         if let q = qr { q.setText(text); q.window?.makeKeyAndOrderFront(nil); activate(); return }
         let q = QRCodeWindowController(text: text)
-        q.onClose = { [weak self] in self?.qr = nil }
+        q.onClose = { [weak self] in self?.qr = nil; self?.qrShowsLockedNote = false }
         qr = q
         q.window?.makeKeyAndOrderFront(nil)
         activate()
@@ -75,8 +96,9 @@ final class WindowRouter: WindowRouting {
     func showCompare(leftID: Int64, rightID: Int64) {
         let c = CompareWindowController(state: state, leftID: leftID, rightID: rightID)
         let key = ObjectIdentifier(c)
-        c.onClose = { [weak self] in self?.compares[key] = nil }
+        c.onClose = { [weak self] in self?.compares[key] = nil; self?.compareIDs[key] = nil }
         compares[key] = c
+        compareIDs[key] = [leftID, rightID]
         c.window?.makeKeyAndOrderFront(nil)
         activate()
     }
@@ -95,6 +117,10 @@ final class WindowRouter: WindowRouting {
         if about == nil { about = AboutWindowController() }
         about?.window?.makeKeyAndOrderFront(nil)
         activate()
+    }
+
+    func showStickyNote(clipID: Int64) {
+        StickyNoteCenter.shared.show(clipID: clipID, state: state, activate: true)
     }
 
     func pickGroup(title: String, completion: @escaping (Int64?) -> Void) {

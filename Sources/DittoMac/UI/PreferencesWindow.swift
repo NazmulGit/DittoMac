@@ -76,7 +76,8 @@ final class PrefsModel: ObservableObject {
     func hotkey(_ name: String) -> Binding<Int> {
         Binding(get: { self.s.hotkey(name) },
                 set: { v in
-                    if v != 0, let clash = self.s.hotkeys.first(where: { $0.key != name && $0.value == v })?.key {
+                    // Includes the screenshot capture hotkeys at their effective (default or set) values.
+                    if let clash = HotkeyClash.firstClash(name: name, value: v, in: self.s.effectiveHotkeys) {
                         self.notice = "\(KeyCombo(encoded: v).displayString) is also assigned to “\(Self.title(forHotkey: clash))”."
                     } else { self.notice = nil }
                     self.s.setHotkey(name, v)
@@ -92,6 +93,9 @@ final class PrefsModel: ObservableObject {
         case "textOnlyPaste": return "Text-only paste"
         case "saveClipboard": return "Save current clipboard"
         case "copyAndSave": return "Copy & save current clipboard"
+        case "captureArea": return "Capture area"
+        case "captureWindow": return "Capture window"
+        case "captureFullScreen": return "Capture full screen"
         default:
             if name.hasPrefix("lastTen") { return "Paste last-ten position \(name.dropFirst(7))" }
             if name.hasPrefix("buffer") { return "Copy buffer " + name.dropFirst(6).replacingOccurrences(of: ".", with: " ") }
@@ -120,8 +124,12 @@ struct PreferencesRoot: View {
     var body: some View {
         TabView(selection: $model.tab) {
             GeneralPrefs(m: model).tabItem { Label("General", systemImage: "gearshape") }.tag(PreferencesTab.general)
+            AppearancePrefs(m: model).tabItem { Label("Appearance", systemImage: "paintbrush") }.tag(PreferencesTab.appearance)
             QuickPastePrefs(m: model).tabItem { Label("Quick Paste", systemImage: "doc.on.clipboard") }.tag(PreferencesTab.quickPaste)
             KeyboardPrefs(m: model).tabItem { Label("Keyboard", systemImage: "keyboard") }.tag(PreferencesTab.keyboard)
+            ScreenshotPrefs(m: model).tabItem { Label("Screenshots", systemImage: "camera.viewfinder") }.tag(PreferencesTab.screenshots)
+            SecurityPrefs(m: model).tabItem { Label("Security", systemImage: "lock.shield") }.tag(PreferencesTab.security)
+            SyncPrefs(m: model).tabItem { Label("Sync", systemImage: "icloud") }.tag(PreferencesTab.sync)
             CopyBuffersPrefs(m: model).tabItem { Label("Copy Buffers", systemImage: "square.stack") }.tag(PreferencesTab.copyBuffers)
             TypesPrefs(m: model).tabItem { Label("Types", systemImage: "list.bullet.rectangle") }.tag(PreferencesTab.types)
             FriendsPrefs(m: model).tabItem { Label("Friends", systemImage: "person.2") }.tag(PreferencesTab.friends)
@@ -177,13 +185,6 @@ struct GeneralPrefs: View {
                 })
     }
 
-    private var themes: [String] {
-        var n = ThemeData.all.map(\.name)
-        if !n.contains("System") { n.insert("System", at: 0) }
-        return n
-    }
-    private static let families: [String] = NSFontManager.shared.availableFontFamilies
-
     var body: some View {
         Form {
             Section("Startup") {
@@ -201,16 +202,11 @@ struct GeneralPrefs: View {
                 Toggle("Connected to clipboard (capture copies)", isOn: connectedBinding)
             }
             Section("Appearance") {
-                Picker("Theme", selection: m.b(\.themeName)) {
-                    ForEach(themes, id: \.self) { Text($0).tag($0) }
-                }
-                Picker("Font", selection: m.b(\.fontName)) {
-                    Text("System default").tag("")
-                    ForEach(Self.families, id: \.self) { Text($0).tag($0) }
-                    if !m.s.fontName.isEmpty && !Self.families.contains(m.s.fontName) { Text(m.s.fontName).tag(m.s.fontName) }
-                }
-                Stepper(value: m.b(\.fontSize), in: 6...72, step: 1) {
-                    Text("Font size: \(Int(m.s.fontSize)) pt")
+                HStack {
+                    Text("Theme: \(m.s.themeName) · \(m.s.appearanceMode.title) · \(m.s.fontName.isEmpty ? "System font" : m.s.fontName) \(Int(m.s.fontSize)) pt")
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Appearance Settings…") { m.tab = .appearance }
                 }
             }
             Section("Updates") {

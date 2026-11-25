@@ -134,3 +134,43 @@ DittoMac addition (upstream Ditto stores CF_HTML/RTF but has no paste-format cho
 | Row indicators | ✅ subtle "rich formatting" and "image + text" symbols |
 | Preview | ✅ RTFD with local images; HTML / web-archive HTML via the allow-list sanitiser only |
 | Friends sync of rich formats | 🗺 Friends still sends the core formats only (text, RTF, HTML, PNG, …) |
+
+## 12. Locked notes, sticky notes, appearance (DittoMac 1.2)
+
+![DittoMac 1.2 popup, desktop notes and Appearance preferences](assets/ui-v12.png)
+
+### Locked notes (popup integration of the vault, see docs/kb/vault.md)
+| Feature | Status |
+|---|---|
+| Lock / Lock N Clips (⌘L, context menu); first lock runs vault setup (Touch ID / Mac password, or a DittoMac password) | ✅ |
+| Remove Lock… (⌘L when every selected clip is locked) · Lock Notes Now (⇧⌘L, More menu, status menu, bottom-bar lock button) · Unlock Notes… | ✅ |
+| Rows: vault locked → lock icon + “Locked note · unlock to view”, no thumbnail / rich text / colour swatch / search highlight; vault unlocked → real text with a small orange lock badge | ✅ |
+| Status line shows 🔒 Locked / 🔓 Unlocked once the vault is set up | ✅ |
+| Return, double-click, ⌘1…⌘0, Copy, Paste As, Special Paste, global paste hotkeys, status-menu recent clips: unlock first, then continue | ✅ |
+| Pasting / copying a locked note adds `org.nspasteboard.ConcealedType` so other clipboard managers skip it | ✅ |
+| Preview, Edit, Properties, Save As, Compare, QR code, Web Search / Translate: prompt to unlock (work normally once unlocked) | ✅ |
+| Drag-out disabled while locked; Share omits locked notes while locked | ✅ |
+| Export (clips, text, images), Send To (Friends) and sync never include locked notes; FriendsService refuses them too | ✅ |
+| Delete: unlocked items deleted normally; locked ones only via “Delete All…” → authenticate → “Delete this note?” (`VaultService.deleteLockedClips`); “Delete Others, Keep Locked” keeps them | ✅ |
+| Menu-bar recent list shows “🔒 Locked note”, never the text | ✅ |
+| Vault lock / unlock drops cached thumbnails and rich text and reloads the list | ✅ |
+
+### Sticky notes
+| Feature | Status |
+|---|---|
+| New Sticky Note… (⌥⌘N in the popup and app menu, context menu, More menu, status menu, Preferences) — editor in note mode: optional title, rich/plain text, Pin to top (default on → top sticky), Lock this note, Show on desktop, colour | ✅ |
+| Notes appear at the top of the list with a note icon in their colour (title in bold) | ✅ |
+| Show as Desktop Note (context menu): floating, resizable note window; colours yellow/green/pink/blue/purple/grey (light + dark variants); always-on-top toggle (pin); plain-text editing with 0.6 s autosave (re-encrypted when locked); remembered frame per note | ✅ |
+| Desktop note lock button: lock the note / Lock Notes Now / Remove Lock…; a locked note shows “🔒 Locked note — Unlock…” and its text is never put in the window | ✅ |
+| Restore desktop notes at launch (default on) | ✅ |
+
+### Appearance (Preferences › Appearance, applied live)
+| Feature | Status |
+|---|---|
+| Appearance System / Light / Dark (NSApp.appearance) | ✅ |
+| Selection colour: theme default, 10-colour palette, custom colour | ✅ |
+| Themes: all built-ins + System, custom themes, live preview; Import / Export JSON (≤ 64 KB, hex only, sanitised names); theme editor (12 colours) → Save as Custom Theme (~/Library/Application Support/DittoMac/Themes, 0600) | ✅ |
+| Rows: density compact / comfortable / spacious, selection corner radius, lines per row, relative timestamps, source-app icon, format badges, dividers, first-ten number style (plain / badge / ⌘ keycap) | ✅ |
+| List font family and size with preview; popup width / height; transparency; opaque or translucent (vibrancy) material | ✅ |
+| Menu-bar icon (9 SF Symbols), dim when disconnected, “new clips since last opened” badge | ✅ |
+| Restore Appearance Defaults | ✅ |

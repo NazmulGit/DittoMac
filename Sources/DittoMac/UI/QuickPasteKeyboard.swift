@@ -103,6 +103,7 @@ extension QuickPasteController {
             case "n": newClip(); return true
             case "e": editSelection(); return true
             case "i": propertiesSelection(); return true
+            case "l": toggleLockSelection(); return true
             case "r": refresh(); return true
             case "a":
                 if inSearch { return false }
@@ -117,6 +118,8 @@ extension QuickPasteController {
         if flags == [.command, .shift], key == "s" { saveSelectionAs(); return true }
         if flags == [.command, .control], key == "n" { newGroup(fromSelection: false); return true }
         if flags == [.command, .option], key == "f" { cycleSearchMode(); return true }
+        if flags == [.command, .shift], key == "l" { lockVaultNow(); return true }
+        if flags == [.command, .option], key == "n" { newStickyNote(); return true }
 
         // Clip / group shortcuts that work inside the popup.
         if !none || Self.functionKeyCodes.contains(code) {

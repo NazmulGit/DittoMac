@@ -3,6 +3,29 @@
 All notable changes to DittoMac are recorded here. The format follows [Keep a Changelog](https://keepachangelog.com/)
 and the project uses [Semantic Versioning](https://semver.org/).
 
+## [1.2.0] - 2026-11-25
+### Added
+- **Screenshots (Lightshot replacement).** Area (⌃⇧4), window (⌃⇧5) and full-screen (⌃⇧3) capture with a frozen-screen
+  overlay, selection move/resize, magnifier with colour code, ⌘A whole screen and hold-⌘ instant copy; tools: pen, line,
+  arrow, rectangle, ellipse, marker, text, numbered steps, pixelate, blur, eyedropper, undo/redo; actions: copy, save
+  (PNG/JPG/BMP), print, pin to screen, upload and share by link, share to social networks, search similar images.
+  Every screenshot is added to the clipboard history.
+- **Beautify:** 18 professional presets, gradients/solid/transparent backgrounds, padding, rounded corners, shadow,
+  outline, macOS-window and browser frames, aspect ratios; per capture or automatic.
+- **Upload and share:** bring-your-own provider (custom HTTPS endpoint, Imgur with your Client-ID, 0x0.st), one-time
+  consent notice, upload history with delete for Imgur; share-link buttons for X, Facebook, Pinterest, VK, Reddit,
+  LinkedIn, WhatsApp, Telegram, email, and Google Lens search.
+- **Locked sticky notes (vault).** Lock clips so retention, delete-all, delete-unused and the Delete key can't remove
+  them; AES-256-GCM at rest; unlock with Touch ID / Mac login password or a new DittoMac password; auto-lock, lock on
+  sleep/screen lock; New Sticky Note (⌥⌘N) and floating desktop notes.
+- **Cloud sync and backup** through any folder your cloud app syncs (Google Drive, iCloud Drive, Dropbox, OneDrive, Box):
+  end-to-end encrypted snapshots, additive merge across Macs, rolling backups, restore.
+- **Appearance and customization:** light/dark/system, accent colour, theme editor with import/export, row density,
+  timestamps, source-app icons, format badges, translucent popup, menu-bar icon styles, popup polish.
+### Fixed
+- Capture/vault/sync hardening from two review passes (see `docs/kb/security-review-v12.md`).
+- Reset all settings now also resets the new screenshot, upload, sync, appearance and vault timing options.
+
 ## [1.1.1] - 2026-11-25
 ### Fixed
 - **Drag and drop of several clips now works.** Select any number of clips and drag them to Finder, the desktop,

@@ -44,7 +44,12 @@ Sources/DittoMac/
   UI/PropertiesWindow.swift         clip properties
   UI/PreferencesWindow.swift        tabs: General, Quick Paste, Keyboard, Copy Buffers, Types, Friends, Rules, Stats, Advanced
   UI/QRCodeWindow.swift, UI/CompareWindow.swift, UI/DeleteClipDataWindow.swift, UI/GroupPicker.swift
-  UI/Theme.swift                    ThemeData → NSColor
+  UI/Theme.swift                    ThemeData → NSColor (built-in or custom theme, accent override)
+  UI/AppearanceManager.swift        NSApp.appearance, ClipRowStyle, CustomThemes (JSON files), AppIconCache
+  UI/PreferencesAppearance.swift    Appearance tab (themes, editor, rows, font, menu bar, notes)
+  UI/QuickPasteLock.swift           lock / unlock / lock-aware delete / sticky-note actions in the popup
+  UI/StickyNoteWindow.swift         StickyNoteCenter + floating desktop note windows
+  UI/UIProofRenderer.swift          `DittoMac --render-ui-proofs <dir>`: offscreen PNG proofs (dev tool)
   UI/KeyRecorderView.swift          shortcut recorder control
 Tests/DittoCoreTests/*.swift
 ```
@@ -291,6 +296,9 @@ gear button = clip menu, ellipsis button = "More" (window) menu.
 | F3, Space (list) | preview |
 | ⌘⇧N, F7 | new group from selection |
 | ⌃⌘N | new group |
+| ⌥⌘N | new sticky note (editor in note mode) |
+| ⌘L | lock selection; when every selected clip is locked: remove lock |
+| ⇧⌘L | lock notes now (vault) |
 | ⌘↑ | back to parent group |
 | Home (list), ⌘Home | History (top level) |
 | ⌘R, F5 | refresh |

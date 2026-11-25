@@ -134,13 +134,16 @@ public struct Clip: Sendable, Equatable, Identifiable {
     public var moveToGroupShortcut: Int
     public var globalMoveToGroupShortcut: Bool
     public var sourceApp: String
+    /// Locked clips are encrypted at rest, hidden until the vault is unlocked, and can't be deleted by accident.
+    public var isLocked: Bool
 
     public init(id: Int64 = 0, date: Date = Date(), text: String = "", shortcut: Int = 0,
                 globalShortcut: Bool = false, dontAutoDelete: Bool = false, crc: Int32 = 0,
                 isGroup: Bool = false, parentID: Int64 = Ditto.topLevelParent, quickPasteText: String = "",
                 clipOrder: Double = 0, clipGroupOrder: Double = 0, lastPasteDate: Date? = nil,
                 stickyClipOrder: Double = Ditto.stickySentinel, stickyClipGroupOrder: Double = Ditto.stickySentinel,
-                moveToGroupShortcut: Int = 0, globalMoveToGroupShortcut: Bool = false, sourceApp: String = "") {
+                moveToGroupShortcut: Int = 0, globalMoveToGroupShortcut: Bool = false, sourceApp: String = "",
+                isLocked: Bool = false) {
         self.id = id
         self.date = date
         self.text = text
@@ -159,6 +162,7 @@ public struct Clip: Sendable, Equatable, Identifiable {
         self.moveToGroupShortcut = moveToGroupShortcut
         self.globalMoveToGroupShortcut = globalMoveToGroupShortcut
         self.sourceApp = sourceApp
+        self.isLocked = isLocked
     }
 
     /// True when either sticky column holds a real value.

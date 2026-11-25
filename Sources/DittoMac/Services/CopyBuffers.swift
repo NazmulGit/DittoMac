@@ -154,7 +154,9 @@ final class CopyBuffers: CopyBuffersServicing {
     private func store(_ formats: [ClipFormat], slot: Int) {
         let desc = description(for: formats, slot: slot)
         do {
-            if let id = slotClipID(slot), (try? state.store.clip(id: id)) != nil {
+            // A slot whose clip was locked keeps that note intact: the buffer starts a new clip instead of
+            // overwriting the locked note's contents (which would delete them).
+            if let id = slotClipID(slot), let existing = try? state.store.clip(id: id), !existing.isLocked {
                 try state.store.replaceFormats(clipID: id, formats: formats, description: desc)
                 if var c = try state.store.clip(id: id), !c.dontAutoDelete {
                     c.dontAutoDelete = true

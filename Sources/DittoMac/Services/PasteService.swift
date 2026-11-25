@@ -84,10 +84,15 @@ enum PasteContent {
     }
 }
 
+/// Marks a pasteboard write as secret so clipboard managers / history tools skip it (nspasteboard.org).
+let concealedPasteboardType = NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType")
+
 @MainActor
 final class PasteService: PasteServicing {
     unowned let state: AppState
     var targetApp: NSRunningApplication?
+    /// Set while writing locked notes: `writeToPasteboard` adds `org.nspasteboard.ConcealedType`.
+    private var concealWrites = false
 
     /// Max dimension for stitched images (safety cap).
     private let maxStitchDimension = 16_384
@@ -114,8 +119,34 @@ final class PasteService: PasteServicing {
     private func paste(_ clipIDs: [Int64], format: PasteFormat, transform: TextTransform?, sendPaste: Bool, moveToTop: Bool) {
         let ids = pastableIDs(clipIDs)
         guard !ids.isEmpty else { return }
-        guard loadToPasteboard(ids, format: format, transform: transform) else { return }
-        finishPaste(ids: ids, sendPaste: sendPaste, moveToTop: moveToTop)
+        withLockedAccess(ids) { [weak self] in
+            guard let self else { return }
+            guard self.loadToPasteboard(ids, format: format, transform: transform) else { return }
+            self.finishPaste(ids: ids, sendPaste: sendPaste, moveToTop: moveToTop)
+        }
+    }
+
+    // MARK: Locked notes
+
+    private func lockedIDs(_ ids: [Int64]) -> [Int64] {
+        ids.filter { (try? store.clip(id: $0))?.isLocked == true }
+    }
+
+    /// Locked notes have no readable data while the vault is locked: unlock first (Touch ID / password), then run
+    /// `action` with pasteboard writes marked concealed. Without locked notes, runs `action` right away.
+    private func withLockedAccess(_ ids: [Int64], _ action: @escaping () -> Void) {
+        let locked = !lockedIDs(ids).isEmpty
+        guard locked else { action(); return }
+        let run = { [weak self] in
+            guard let self else { return }
+            (self.state.vault as? VaultService)?.noteActivity()
+            self.concealWrites = true
+            defer { self.concealWrites = false }
+            action()
+        }
+        guard let vault = state.vault, vault.isSetUp else { state.message("This note is locked"); return }
+        if vault.isUnlocked { run(); return }
+        vault.requestUnlock(reason: "paste a locked note") { ok in if ok { run() } }
     }
 
     func defaultPasteFormat() -> PasteFormat {
@@ -124,6 +155,10 @@ final class PasteService: PasteServicing {
 
     func pasteImagesStitched(clipIDs: [Int64], vertical: Bool) {
         let ids = pastableIDs(clipIDs)
+        withLockedAccess(ids) { [weak self] in self?.stitchAndPaste(ids, vertical: vertical) }
+    }
+
+    private func stitchAndPaste(_ ids: [Int64], vertical: Bool) {
         var images: [CGImage] = []
         for id in ids {
             // Check the header first so a decompression bomb is never fully decoded.
@@ -147,14 +182,24 @@ final class PasteService: PasteServicing {
     func copyToPasteboard(clipIDs: [Int64], transform: TextTransform?) {
         let ids = pastableIDs(clipIDs)
         guard !ids.isEmpty else { return }
-        _ = loadToPasteboard(ids, format: .original, transform: transform)
+        withLockedAccess(ids) { [weak self] in _ = self?.loadToPasteboard(ids, format: .original, transform: transform) }
     }
 
+    /// Returns false when nothing was written now (including while waiting for a locked note to be unlocked;
+    /// the copy then happens after a successful unlock).
     @discardableResult
     func copyToPasteboard(clipIDs: [Int64], format: PasteFormat) -> Bool {
         let ids = pastableIDs(clipIDs)
         guard !ids.isEmpty else { return false }
-        return loadToPasteboard(ids, format: format, transform: nil)
+        var result = false
+        var ranNow = true
+        withLockedAccess(ids) { [weak self] in
+            guard let self else { return }
+            result = self.loadToPasteboard(ids, format: format, transform: nil)
+            if !ranNow, result { self.state.message("Copied to clipboard") }
+        }
+        ranNow = false
+        return result
     }
 
     @discardableResult
@@ -162,11 +207,23 @@ final class PasteService: PasteServicing {
         let pb = NSPasteboard.general
         pb.clearContents()
         let items = PasteContent.pasteboardItems(for: formats)
-        for it in items { it.setData(Data(), forType: dittoInternalPasteboardType) }
+        for it in items {
+            it.setData(Data(), forType: dittoInternalPasteboardType)
+            if concealWrites { it.setData(Data(), forType: concealedPasteboardType) }
+        }
         pb.writeObjects(items)
         let cc = pb.changeCount
         state.monitor?.ignoreChangeCount(cc)
         return cc
+    }
+
+    /// `writeToPasteboard` with `org.nspasteboard.ConcealedType` added when `concealed` (locked-note text).
+    @discardableResult
+    func writeToPasteboard(_ formats: [ClipFormat], concealed: Bool) -> Int {
+        let was = concealWrites
+        concealWrites = concealWrites || concealed
+        defer { concealWrites = was }
+        return writeToPasteboard(formats)
     }
 
     func postCommandKey(_ char: Character) {

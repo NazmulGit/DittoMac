@@ -34,29 +34,62 @@ final class ClipTableView: NSTableView {
     override var acceptsFirstResponder: Bool { true }
 }
 
-// MARK: - Row view (themed background + selection)
+// MARK: - Row view (themed background + rounded selection)
 
 @MainActor
 final class ClipRowView: NSTableRowView {
     var rowIndex = 0 { didSet { if oldValue != rowIndex { needsDisplay = true } } }
+    var style = ClipRowStyle() { didSet { needsDisplay = true } }
+
+    /// Background for this row. With row dividers on, the System theme uses one flat colour (dividers separate the
+    /// rows); themes keep their odd / even colours. Translucent popups draw no row background at all.
+    private var rowFillColor: NSColor? {
+        let theme = AppTheme.current
+        if style.translucent { return nil }
+        if theme.isSystem && style.showDividers { return theme.listBackground }
+        return theme.rowBackground(odd: rowIndex % 2 == 0)
+    }
+
+    private var selectionRect: NSRect {
+        guard style.cornerRadius > 0 else { return bounds }
+        let m = style.metrics
+        return bounds.insetBy(dx: CGFloat(m.selectionInsetX), dy: CGFloat(m.selectionInsetY))
+    }
 
     override func drawBackground(in dirtyRect: NSRect) {
-        AppTheme.current.rowBackground(odd: rowIndex % 2 == 0).setFill()
-        bounds.fill()
+        if let bg = rowFillColor {
+            bg.setFill()
+            bounds.fill()
+        }
+        guard style.showDividers, !isSelected, !isNextRowSelected else { return }
+        let inset = CGFloat(style.metrics.horizontalPadding)
+        let line = NSRect(x: bounds.minX + inset, y: bounds.maxY - 0.5, width: max(bounds.width - 2 * inset, 0), height: 0.5)
+        let theme = AppTheme.current
+        (theme.isSystem ? NSColor.separatorColor.withAlphaComponent(0.55) : theme.border.withAlphaComponent(0.22)).setFill()
+        line.fill(using: .sourceOver)
     }
 
     override func drawSelection(in dirtyRect: NSRect) {
         guard selectionHighlightStyle != .none else { return }
-        AppTheme.current.selectionBackground(emphasized: isEmphasized).setFill()
-        bounds.fill()
+        let color = AppTheme.current.selectionBackground(emphasized: isEmphasized)
+        color.setFill()
+        let r = selectionRect
+        if style.cornerRadius > 0 {
+            let radius = min(style.cornerRadius, r.height / 2)
+            NSBezierPath(roundedRect: r, xRadius: radius, yRadius: radius).fill()
+        } else {
+            r.fill()
+        }
     }
+
+    override var isFlipped: Bool { true }
 
     override var isEmphasized: Bool {
         didSet { needsDisplay = true; subviews.forEach { $0.needsDisplay = true } }
     }
 
     override var isSelected: Bool {
-        didSet { subviews.forEach { $0.needsDisplay = true } }
+        didSet { needsDisplay = true; subviews.forEach { $0.needsDisplay = true } }
     }
 }
 
@@ -78,6 +111,17 @@ struct ClipRowModel {
     var imageIndicator = false
     /// Rich description (from the clip's RTF) when "Draw rich text" is on; nil falls back to plain text.
     var rich: NSAttributedString?
+    /// Locked clip (vault). `contentHidden` = locked while the vault is locked: placeholder only, no previews.
+    var isLocked = false
+    var contentHidden = false
+    /// Sticky note ("New Sticky Note" or shown as a desktop note) and its paper colour.
+    var isNote = false
+    var noteColor: NSColor?
+    /// Source-app icon (Appearance › Show source-app icon).
+    var appIcon: NSImage?
+    /// Relative timestamp ("5m", "Yesterday") or nil.
+    var timestamp: String?
+    var style = ClipRowStyle()
 }
 
 // MARK: - Cell view (custom drawn for speed)
@@ -86,7 +130,14 @@ struct ClipRowModel {
 final class ClipCellView: NSTableCellView {
     static let identifier = NSUserInterfaceItemIdentifier("ClipCell")
 
-    var model: ClipRowModel? { didSet { toolTip = model.map { String($0.clip.text.prefix(300)) }; needsDisplay = true } }
+    var model: ClipRowModel? {
+        didSet {
+            if let m = model {
+                toolTip = m.contentHidden ? "Locked note — unlock to view (⌘L menu › Unlock Notes…)" : String(m.clip.text.prefix(300))
+            } else { toolTip = nil }
+            needsDisplay = true
+        }
+    }
     var font: NSFont = .systemFont(ofSize: 13) { didSet { needsDisplay = true } }
     var linesPerRow = 2
 
@@ -96,92 +147,185 @@ final class ClipCellView: NSTableCellView {
     private var isRowSelected: Bool { (superview as? NSTableRowView)?.isSelected ?? false }
     private var isRowEmphasized: Bool { (superview as? NSTableRowView)?.isEmphasized ?? true }
 
-    private static let folderImage = NSImage(systemSymbolName: "folder.fill", accessibilityDescription: "Group")
-    private static let pinImage = NSImage(systemSymbolName: "pin.fill", accessibilityDescription: "Sticky")
-    private static let richImage = NSImage(systemSymbolName: "textformat", accessibilityDescription: "Keeps formatting")
-    private static let photoImage = NSImage(systemSymbolName: "photo", accessibilityDescription: "Has image")
+    private static func symbol(_ name: String, _ desc: String) -> NSImage? {
+        NSImage(systemSymbolName: name, accessibilityDescription: desc)
+    }
+    private static let folderImage = symbol("folder.fill", "Group")
+    private static let pinImage = symbol("pin.fill", "Sticky")
+    private static let richImage = symbol("textformat", "Keeps formatting")
+    private static let photoImage = symbol("photo", "Has image")
+    private static let lockImage = symbol("lock.fill", "Locked")
+    private static let noteImage = symbol("note.text", "Sticky note")
+
+    /// Draws `img` (template symbol) tinted, `h` points tall, vertically centred on `centerY`, from `x`.
+    @discardableResult
+    private static func drawSymbol(_ img: NSImage?, color: NSColor, x: CGFloat, centerY: CGFloat, height h: CGFloat) -> CGFloat {
+        guard let img, img.size.width > 0, img.size.height > 0 else { return 0 }
+        let w = h * img.size.width / img.size.height
+        let r = NSRect(x: x, y: centerY - h / 2, width: w, height: h)
+        tinted(img, color).draw(in: r, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+        return w
+    }
 
     override func draw(_ dirtyRect: NSRect) {
         guard let m = model else { return }
         let theme = AppTheme.current
+        let style = m.style
+        let metrics = style.metrics
         let selected = isRowSelected
         let textColor = selected ? theme.selectionText(emphasized: isRowEmphasized) : theme.rowText(odd: m.row % 2 == 0)
-        let secondary = textColor.withAlphaComponent(0.55)
+        let secondary = textColor.withAlphaComponent(selected ? 0.75 : 0.55)
         let lineH = ceil(font.ascender - font.descender + font.leading)
-        var rect = bounds.insetBy(dx: 4, dy: 3)
+        var rect = bounds.insetBy(dx: CGFloat(metrics.horizontalPadding),
+                                  dy: CGFloat(metrics.verticalPadding + metrics.selectionInsetY))
+        let firstLineMid = rect.minY + lineH / 2
+        let gap = CGFloat(metrics.accessoryGap)
+        let smallSize = max(font.pointSize - 2.5, 9)
 
-        // Right edge: pasted dot + sticky pin.
-        var rightInset: CGFloat = 0
+        // Right edge (first line): timestamp, pasted dot, sticky pin, lock badge, format badges.
+        var right = rect.maxX
+        if let ts = m.timestamp {
+            let f = NSFont.monospacedDigitSystemFont(ofSize: smallSize, weight: .regular)
+            let attrs: [NSAttributedString.Key: Any] = [.font: f, .foregroundColor: secondary]
+            let size = (ts as NSString).size(withAttributes: attrs)
+            (ts as NSString).draw(at: NSPoint(x: right - size.width, y: firstLineMid - size.height / 2), withAttributes: attrs)
+            right -= size.width + 6
+        }
         if m.showPasted {
             let d: CGFloat = 6
-            let dot = NSRect(x: rect.maxX - d, y: rect.minY + (lineH - d) / 2, width: d, height: d)
             theme.pastedColor.setFill()
-            NSBezierPath(ovalIn: dot).fill()
-            rightInset += d + 4
+            NSBezierPath(ovalIn: NSRect(x: right - d, y: firstLineMid - d / 2, width: d, height: d)).fill()
+            right -= d + 5
         }
-        if m.clip.isSticky, let pin = Self.pinImage {
-            let s = min(lineH, 12)
-            let r = NSRect(x: rect.maxX - rightInset - s, y: rect.minY + (lineH - s) / 2, width: s, height: s)
-            Self.tinted(pin, secondary).draw(in: r)
-            rightInset += s + 4
+        if m.clip.isSticky, !m.isNote {
+            let h = min(lineH * 0.78, 11)
+            let w = h * 0.8
+            Self.drawSymbol(Self.pinImage, color: secondary, x: right - w, centerY: firstLineMid, height: h)
+            right -= w + 5
         }
-        // Format indicators (subtle): rich formatting kept, image alongside text.
-        for (show, symbol) in [(m.imageIndicator, Self.photoImage), (m.richIndicator, Self.richImage)] {
-            guard show, let img = symbol, img.size.width > 0 else { continue }
-            let h = min(lineH * 0.75, 11)
-            let w = h * img.size.width / img.size.height
-            let r = NSRect(x: rect.maxX - rightInset - w, y: rect.minY + (lineH - h) / 2, width: w, height: h)
-            Self.tinted(img, secondary).draw(in: r, from: .zero, operation: .sourceOver, fraction: 1,
-                                                                     respectFlipped: true, hints: nil)
-            rightInset += w + 4
+        if m.isLocked, !m.contentHidden {
+            let h = min(lineH * 0.72, 10)
+            let w = h * 0.8
+            Self.drawSymbol(Self.lockImage, color: selected ? secondary : NSColor.systemOrange, x: right - w, centerY: firstLineMid, height: h)
+            right -= w + 5
         }
-        rect.size.width -= rightInset
+        if style.showBadges, !m.contentHidden {
+            for (show, img) in [(m.imageIndicator, Self.photoImage), (m.richIndicator, Self.richImage)] where show {
+                guard let img, img.size.height > 0 else { continue }
+                let h = min(lineH * 0.7, 10.5)
+                let w = h * img.size.width / img.size.height
+                Self.drawSymbol(img, color: secondary.withAlphaComponent(0.8), x: right - w, centerY: firstLineMid, height: h)
+                right -= w + 5
+            }
+        }
+        rect.size.width = max(right - rect.minX, 0)
 
         // First-ten index.
         if let idx = m.indexLabel {
-            let small = NSFont.monospacedDigitSystemFont(ofSize: max(font.pointSize - 2, 8), weight: .regular)
-            let attrs: [NSAttributedString.Key: Any] = [.font: small, .foregroundColor: secondary]
-            let w: CGFloat = small.pointSize * 0.75 + 4
-            (idx as NSString).draw(at: NSPoint(x: rect.minX, y: rect.minY + (lineH - small.pointSize * 1.2) / 2), withAttributes: attrs)
-            rect.origin.x += w
-            rect.size.width -= w
+            let f = NSFont.monospacedDigitSystemFont(ofSize: smallSize, weight: style.firstTen == .plain ? .regular : .semibold)
+            let attrs: [NSAttributedString.Key: Any] = [.font: f, .foregroundColor: secondary]
+            let size = (idx as NSString).size(withAttributes: attrs)
+            switch style.firstTen {
+            case .plain:
+                let w = ceil(f.pointSize * 0.62) + 2
+                (idx as NSString).draw(at: NSPoint(x: rect.minX + (w - size.width) / 2, y: firstLineMid - size.height / 2), withAttributes: attrs)
+                rect.origin.x += w + gap - 2
+                rect.size.width -= w + gap - 2
+            case .badge, .keycap:
+                let h = ceil(size.height + 2)
+                let w = max(ceil(size.width + 8), h)
+                let box = NSRect(x: rect.minX, y: firstLineMid - h / 2, width: w, height: h)
+                let path = NSBezierPath(roundedRect: box, xRadius: style.firstTen == .badge ? h / 2 : 4, yRadius: style.firstTen == .badge ? h / 2 : 4)
+                if style.firstTen == .badge {
+                    textColor.withAlphaComponent(selected ? 0.22 : 0.08).setFill()
+                    path.fill()
+                } else {
+                    secondary.withAlphaComponent(0.6).setStroke()
+                    path.lineWidth = 0.8
+                    path.stroke()
+                }
+                (idx as NSString).draw(at: NSPoint(x: box.midX - size.width / 2, y: box.midY - size.height / 2), withAttributes: attrs)
+                let keycapWidth = style.firstTen == .keycap ? max(w, ceil(("⌘0" as NSString).size(withAttributes: attrs).width + 8)) : w
+                rect.origin.x += keycapWidth + gap
+                rect.size.width -= keycapWidth + gap
+            }
         }
 
-        // Group folder icon.
-        if m.clip.isGroup, let folder = Self.folderImage {
+        // Source-app icon.
+        if let icon = m.appIcon {
             let s = min(lineH, 16)
-            Self.tinted(folder, selected ? textColor : .systemBlue).draw(in: NSRect(x: rect.minX, y: rect.minY + (lineH - s) / 2, width: s, height: s))
-            rect.origin.x += s + 4
-            rect.size.width -= s + 4
+            icon.draw(in: NSRect(x: rect.minX, y: firstLineMid - s / 2, width: s, height: s), from: .zero,
+                      operation: .sourceOver, fraction: m.contentHidden ? 0.5 : 1, respectFlipped: true,
+                      hints: [.interpolation: NSImageInterpolation.high.rawValue])
+            rect.origin.x += s + gap - 1
+            rect.size.width -= s + gap - 1
         }
 
-        // Thumbnail.
-        if let img = m.thumbnail, img.size.width > 0, img.size.height > 0 {
+        // Leading symbol: lock (hidden locked note), note, group folder.
+        if m.contentHidden || m.isNote || m.clip.isGroup {
+            let s = min(lineH, 15)
+            let img: NSImage?
+            let color: NSColor
+            if m.contentHidden {
+                img = Self.lockImage
+                color = selected ? textColor : NSColor.systemOrange
+            } else if m.clip.isGroup {
+                img = Self.folderImage
+                color = selected ? textColor : .systemBlue
+            } else {
+                img = Self.noteImage
+                color = selected ? textColor : (m.noteColor.map { Self.readable($0, on: theme.rowBackground(odd: true)) } ?? .systemYellow)
+            }
+            let w = Self.drawSymbol(img, color: color, x: rect.minX, centerY: firstLineMid, height: s * 0.92)
+            rect.origin.x += max(w, s) + gap - 2
+            rect.size.width -= max(w, s) + gap - 2
+        }
+
+        // Thumbnail (never for hidden locked notes).
+        if !m.contentHidden, let img = m.thumbnail, img.size.width > 0, img.size.height > 0 {
             let maxH = rect.height
             let maxW = min(rect.width * 0.4, maxH * 2.5)
             let scale = min(maxH / img.size.height, maxW / img.size.width, 1)
             let size = NSSize(width: img.size.width * scale, height: img.size.height * scale)
             let r = NSRect(x: rect.minX, y: rect.minY + (maxH - size.height) / 2, width: size.width, height: size.height)
+            NSGraphicsContext.saveGraphicsState()
+            NSBezierPath(roundedRect: r, xRadius: 3, yRadius: 3).addClip()
             img.draw(in: r, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: [.interpolation: NSImageInterpolation.high.rawValue])
-            rect.origin.x += size.width + 6
-            rect.size.width -= size.width + 6
+            NSGraphicsContext.restoreGraphicsState()
+            secondary.withAlphaComponent(0.25).setStroke()
+            let border = NSBezierPath(roundedRect: r.insetBy(dx: 0.25, dy: 0.25), xRadius: 3, yRadius: 3)
+            border.lineWidth = 0.5
+            border.stroke()
+            rect.origin.x += size.width + gap
+            rect.size.width -= size.width + gap
         }
 
         // Colour swatch.
-        if let c = m.swatch {
+        if !m.contentHidden, let c = m.swatch {
             let s = min(lineH, 14)
-            let r = NSRect(x: rect.minX, y: rect.minY + (lineH - s) / 2, width: s, height: s)
+            let r = NSRect(x: rect.minX, y: firstLineMid - s / 2, width: s, height: s)
             c.setFill()
-            let p = NSBezierPath(roundedRect: r, xRadius: 3, yRadius: 3)
+            let p = NSBezierPath(roundedRect: r, xRadius: 3.5, yRadius: 3.5)
             p.fill()
-            secondary.setStroke()
+            secondary.withAlphaComponent(0.4).setStroke()
             p.lineWidth = 0.5
             p.stroke()
-            rect.origin.x += s + 5
-            rect.size.width -= s + 5
+            rect.origin.x += s + gap - 1
+            rect.size.width -= s + gap - 1
         }
 
         guard rect.width > 4 else { return }
+
+        // Hidden locked note: placeholder only.
+        if m.contentHidden {
+            let italic = NSFontManager.shared.convert(font, toHaveTrait: .italicFontMask)
+            let s = NSMutableAttributedString(string: ClipStore.lockedPlaceholder, attributes: [.font: italic, .foregroundColor: secondary])
+            s.append(NSAttributedString(string: "  ·  unlock to view", attributes: [
+                .font: NSFont.systemFont(ofSize: smallSize), .foregroundColor: secondary.withAlphaComponent(0.7)]))
+            s.draw(with: NSRect(x: rect.minX, y: rect.minY, width: rect.width, height: lineH + 1),
+                   options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine], context: nil)
+            return
+        }
 
         // Symbols + description text.
         let text = NSMutableAttributedString()
@@ -192,7 +336,7 @@ final class ClipCellView: NSTableCellView {
         if m.showSymbols, !m.clip.isGroup, m.clip.parentID > 0 { symbols += "!" }
         if !symbols.isEmpty {
             text.append(NSAttributedString(string: symbols + " ", attributes: [
-                .font: NSFont.boldSystemFont(ofSize: max(font.pointSize - 1, 8)), .foregroundColor: secondary]))
+                .font: NSFont.systemFont(ofSize: max(font.pointSize - 1, 8), weight: .semibold), .foregroundColor: secondary]))
         }
         let para = NSMutableParagraphStyle()
         para.lineBreakMode = .byWordWrapping
@@ -200,12 +344,13 @@ final class ClipCellView: NSTableCellView {
         if let rich = m.rich {
             bodyAttr = Self.styledRich(rich, font: font, color: textColor)
         } else {
+            let bodyFont = m.isNote || m.clip.isGroup ? NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask) : font
             bodyAttr = NSMutableAttributedString(string: Self.displayText(m.clip.text, lines: linesPerRow),
-                                                 attributes: [.font: font, .foregroundColor: textColor])
+                                                 attributes: [.font: bodyFont, .foregroundColor: textColor])
         }
         let body = bodyAttr.string
         if let hl = m.highlighter {
-            let color = selected && theme.isSystem ? textColor : theme.searchHighlight
+            let color = selected && (theme.isSystem || !theme.accentHex.isEmpty) ? textColor : theme.searchHighlight
             for r in hl.ranges(in: body) {
                 bodyAttr.addAttributes([.foregroundColor: color, .underlineStyle: selected ? NSUnderlineStyle.single.rawValue : 0], range: r)
             }
@@ -214,6 +359,13 @@ final class ClipCellView: NSTableCellView {
         text.addAttribute(.paragraphStyle, value: para, range: NSRange(location: 0, length: text.length))
         let textRect = NSRect(x: rect.minX, y: rect.minY, width: rect.width, height: min(rect.height, lineH * CGFloat(linesPerRow) + 1))
         text.draw(with: textRect, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine], context: nil)
+    }
+
+    /// A note colour darkened / lightened until it reads on `background` (note paper colours are pale).
+    static func readable(_ c: NSColor, on background: NSColor) -> NSColor {
+        let bg = background.usingColorSpace(.sRGB) ?? background
+        let lumBG = 0.299 * bg.redComponent + 0.587 * bg.greenComponent + 0.114 * bg.blueComponent
+        return lumBG > 0.5 ? (c.blended(withFraction: 0.45, of: .black) ?? c) : c
     }
 
     /// Restyles RTF-derived text for the list: keeps bold/italic/underline/strike, but uses the list font size and

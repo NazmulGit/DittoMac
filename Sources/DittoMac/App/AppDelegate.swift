@@ -30,6 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         applyActivationPolicy()
+        AppearanceManager.apply(settings)
 
         let store: ClipStore
         do {
@@ -46,6 +47,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        ClipDragWriter.purgeAllStaging()      // leftovers from a crash (may include unlocked-note plaintext)
         let state = AppState(store: store, settings: settings)
         AppState.shared = state
         self.state = state
@@ -60,6 +62,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         state.windows = WindowRouter(state: state)
         state.friends = FriendsService(state: state)
         state.copyBuffers = CopyBuffers(state: state)
+        state.vault = VaultService(state: state)
+        state.screenshots = ScreenshotService(state: state)
+        state.sync = SyncService(state: state)
 
         quickPaste = QuickPasteController(state: state)
         statusItem = StatusItemController(state: state)
@@ -67,7 +72,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         monitor.start()
         registerHotkeys()
+        state.screenshots?.registerHotkeys()
+        state.sync?.applySettings()
         ensureLaunchAtLogin()
+        StickyNoteCenter.shared.restore(state: state)
 
         let nc = NotificationCenter.default
         nc.addObserver(self, selector: #selector(hotkeysChanged), name: .dittoHotkeysChanged, object: nil)
@@ -97,6 +105,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         retentionTimer?.invalidate()
         monitor?.stop()
+        ClipDragWriter.purgeAllStaging()
     }
 
     static func databaseURL() -> URL {
@@ -133,11 +142,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func settingsChanged() {
         applyActivationPolicy()
+        AppearanceManager.apply(settings)
         scheduleRetention()
+        state.sync?.applySettings()
     }
 
     @objc private func hotkeysChanged() {
         registerHotkeys()
+        state.screenshots?.registerHotkeys()
     }
 
     // MARK: Hotkeys
@@ -374,6 +386,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appMenu.addItem(.separator())
         appMenu.addItem(QuickPasteMenuItem("Preferences…", key: ",") { [weak self] in self?.state.windows.showPreferences(tab: nil) })
         appMenu.addItem(QuickPasteMenuItem("Show Quick Paste", key: "") { [weak self] in self?.state.showQuickPaste?(nil) })
+        appMenu.addItem(QuickPasteMenuItem("New Sticky Note…", key: "n", modifiers: [.command, .option]) { [weak self] in
+            guard let self else { return }
+            StickyNoteCenter.shared.newNote(state: self.state)
+        })
         appMenu.addItem(.separator())
         appMenu.addItem(NSMenuItem(title: "Hide DittoMac", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h"))
         appMenu.addItem(NSMenuItem(title: "Quit DittoMac", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
