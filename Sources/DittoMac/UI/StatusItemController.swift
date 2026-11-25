@@ -8,7 +8,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private unowned let state: AppState
     private var item: NSStatusItem?
     private let menu = NSMenu()
-    static let releasesURL = URL(string: "https://github.com/NazmulGit/DittoMac/releases")!
+    static let releasesURL = URL(string: "https://github.com/NazmulGit/DittoMac-Clipboard-Manager/releases")!
 
     init(state: AppState) {
         self.state = state

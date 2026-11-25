@@ -30,7 +30,7 @@ private struct AboutView: View {
                 .multilineTextAlignment(.center).foregroundStyle(.secondary)
             Divider().padding(.vertical, 4)
             Link("Upstream: github.com/sabrogden/Ditto", destination: URL(string: "https://github.com/sabrogden/Ditto")!)
-            Link("DittoMac releases (check for updates)", destination: URL(string: "https://github.com/NazmulGit/DittoMac/releases")!)
+            Link("DittoMac releases (check for updates)", destination: URL(string: "https://github.com/NazmulGit/DittoMac-Clipboard-Manager/releases")!)
             Text("This program is free software under the GNU General Public License v3.0. It comes with no warranty.")
                 .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center).padding(.top, 6)
         }

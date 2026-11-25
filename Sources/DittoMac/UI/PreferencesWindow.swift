@@ -214,7 +214,7 @@ struct GeneralPrefs: View {
                 }
             }
             Section("Updates") {
-                Link("Check for updates (opens GitHub Releases)", destination: URL(string: "https://github.com/NazmulGit/DittoMac/releases")!)
+                Link("Check for updates (opens GitHub Releases)", destination: URL(string: "https://github.com/NazmulGit/DittoMac-Clipboard-Manager/releases")!)
             }
             Section("Database") {
                 LabeledContent("Location") {
